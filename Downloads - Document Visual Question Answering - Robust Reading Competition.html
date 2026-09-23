@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<!-- saved from url=(0043)https://rrc.cvc.uab.es/?ch=17&com=downloads -->
+<html data-darkreader-mode="dynamic" data-darkreader-scheme="dark" data-darkreader-proxy-injected="true"><script async="" src="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/analytics.js.download"></script><script src="chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/content/location/location.js" id="eppiocemhmnlbhjplcgkofciiegomcon"></script><script src="chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/libs/extend-native-history-api.js"></script><script src="chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/libs/requests.js"></script><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><style class="darkreader darkreader--fallback" media="screen"></style><style class="darkreader darkreader--user-agent" media="screen">@layer {
+html {
+    background-color: var(--darkreader-background-ffffff, #181a1b) !important;
+}
+html {
+    color-scheme: dark !important;
+}
+iframe {
+    color-scheme: dark !important;
+}
+html, body {
+    background-color: var(--darkreader-background-ffffff, #181a1b);
+}
+html, body {
+    border-color: var(--darkreader-border-4c4c4c, #736b5e);
+    color: var(--darkreader-text-000000, #e8e6e3);
+}
+a {
+    color: var(--darkreader-text-0040ff, #3d96ff);
+}
+table {
+    border-color: var(--darkreader-border-808080, #545b5e);
+}
+mark {
+    color: var(--darkreader-text-000000, #e8e6e3);
+}
+::placeholder {
+    color: var(--darkreader-text-a9a9a9, #b2aba1);
+}
+input:-webkit-autofill,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+    background-color: var(--darkreader-background-faffbd, #444800) !important;
+    color: var(--darkreader-text-000000, #e8e6e3) !important;
+}
+::selection {
+    background-color: var(--darkreader-background-0060d4, #0051b2) !important;
+    color: var(--darkreader-text-ffffff, #e8e6e3) !important;
+}
+::-moz-selection {
+    background-color: var(--darkreader-background-0060d4, #0051b2) !important;
+    color: var(--darkreader-text-ffffff, #e8e6e3) !important;
+}
+}</style><style class="darkreader darkreader--text" media="screen"></style><style class="darkreader darkreader--invert" media="screen">c-wiz div > svg > circle, .jfk-bubble.gtx-bubble, .captcheck_answer_label > input + img, span#closed_text > img[src^="https://www.gstatic.com/images/branding/googlelogo"], span[data-href^="https://www.hcaptcha.com/"] > #icon, img.Wirisformula, a[data-testid="headerMediumLogo"]>svg, .d2l-navigation-link-image-container, .d2l-iframe-loading-container, div.mc-ip-hide[style*="background: rgb(255, 255, 255) !important"], [style*="color: rgb(0, 0, 1) !important;"] {
+    filter: invert(100%) hue-rotate(180deg) contrast(90%) !important;
+}</style><style class="darkreader darkreader--inline" media="screen">[data-darkreader-inline-bgcolor] {
+  background-color: var(--darkreader-inline-bgcolor) !important;
+}
+[data-darkreader-inline-bgimage] {
+  background-image: var(--darkreader-inline-bgimage) !important;
+}
+[data-darkreader-inline-border] {
+  border-color: var(--darkreader-inline-border) !important;
+}
+[data-darkreader-inline-border-bottom] {
+  border-bottom-color: var(--darkreader-inline-border-bottom) !important;
+}
+[data-darkreader-inline-border-left] {
+  border-left-color: var(--darkreader-inline-border-left) !important;
+}
+[data-darkreader-inline-border-right] {
+  border-right-color: var(--darkreader-inline-border-right) !important;
+}
+[data-darkreader-inline-border-top] {
+  border-top-color: var(--darkreader-inline-border-top) !important;
+}
+[data-darkreader-inline-boxshadow] {
+  box-shadow: var(--darkreader-inline-boxshadow) !important;
+}
+[data-darkreader-inline-color] {
+  color: var(--darkreader-inline-color) !important;
+}
+[data-darkreader-inline-fill] {
+  fill: var(--darkreader-inline-fill) !important;
+}
+[data-darkreader-inline-stroke] {
+  stroke: var(--darkreader-inline-stroke) !important;
+}
+[data-darkreader-inline-outline] {
+  outline-color: var(--darkreader-inline-outline) !important;
+}
+[data-darkreader-inline-stopcolor] {
+  stop-color: var(--darkreader-inline-stopcolor) !important;
+}
+[data-darkreader-inline-bg] {
+  background: var(--darkreader-inline-bg) !important;
+}
+[data-darkreader-inline-border-short] {
+  border: var(--darkreader-inline-border-short) !important;
+}
+[data-darkreader-inline-border-bottom-short] {
+  border-bottom: var(--darkreader-inline-border-bottom-short) !important;
+}
+[data-darkreader-inline-border-left-short] {
+  border-left: var(--darkreader-inline-border-left-short) !important;
+}
+[data-darkreader-inline-border-right-short] {
+  border-right: var(--darkreader-inline-border-right-short) !important;
+}
+[data-darkreader-inline-border-top-short] {
+  border-top: var(--darkreader-inline-border-top-short) !important;
+}
+[data-darkreader-inline-invert] {
+    filter: invert(100%) hue-rotate(180deg);
+}</style><style class="darkreader darkreader--variables" media="screen">:root {
+   --darkreader-neutral-background: var(--darkreader-background-ffffff, #181a1b);
+   --darkreader-neutral-text: var(--darkreader-text-000000, #e8e6e3);
+   --darkreader-selection-background: var(--darkreader-background-0060d4, #0051b2);
+   --darkreader-selection-text: var(--darkreader-text-ffffff, #e8e6e3);
+}</style><style class="darkreader darkreader--root-vars" media="screen"></style>
+        
+        <title>Downloads - Document Visual Question Answering - Robust Reading Competition</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        
+<script type="text/javascript" src="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/jquery-1.11.1.min.js.download"></script>
+<script type="text/javascript" src="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/jquery-migrate-1.2.1.min.js.download"></script>
+<script type="text/javascript" src="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/jquery.cookie.js.download"></script>
+<script type="text/javascript" src="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/jquery-ui.min.js.download"></script>
+<script type="text/javascript" src="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/jquery-ui.extra.js.download"></script>
+<script type="text/javascript" src="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/web.js.download"></script>
+<script type="text/javascript" src="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/bootstrap.min.js.download"></script>
+<link rel="stylesheet" href="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/css">
+<link rel="stylesheet" href="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/jquery-ui.min.css"><style class="darkreader darkreader--sync" media="screen"></style>
+<link rel="stylesheet" href="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/style.css"><style class="darkreader darkreader--sync" media="screen"></style>
+<link rel="stylesheet" href="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/bootstrap.min.css"><style class="darkreader darkreader--sync" media="screen"></style>
+<link rel="stylesheet" href="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/icdar2019.css"><style class="darkreader darkreader--sync" media="screen"></style>
+<link rel="stylesheet" href="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/botons.css"><style class="darkreader darkreader--sync" media="screen"></style>
+<link rel="stylesheet" href="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/font-awesome.min.css"><style class="darkreader darkreader--sync" media="screen"></style>            <script>
+              (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+              (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+              m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+              })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+              ga('create', 'UA-59014051-1', 'auto');
+              ga('send', 'pageview');
+
+            </script>
+        <script bis_use="true" type="text/javascript" charset="utf-8" nonce="" data-dynamic-id="a606298f-aab6-4588-a8b7-677320960fae" src="chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/executors/200.js"></script><script bis_use="true" type="text/javascript" charset="utf-8" nonce="" data-dynamic-id="a606298f-aab6-4588-a8b7-677320960fae" src="chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/executors/101.js"></script><meta name="darkreader" content="8f949a76fa0f4902b1b57cc578635a4d"><style class="darkreader darkreader--override" media="screen">c-wiz div {
+    --action-items-action-item-background-color: var(--darkreader-neutral-background) !important;
+}
+.jfk-bubble.gtx-bubble {
+    background-color: white !important;
+}
+.vimvixen-hint {
+    background-color: var(--darkreader-background-ffd76e, #846000) !important;
+    border-color: var(--darkreader-background-c59d00, #aa8700) !important;
+    color: var(--darkreader-text-302505, #d7d4cf) !important;
+}
+#vimvixen-console-frame {
+    color-scheme: light !important;
+}
+::placeholder {
+    opacity: 0.5 !important;
+}
+#edge-translate-panel-body,
+.MuiTypography-body1,
+.nfe-quote-text {
+    color: var(--darkreader-neutral-text) !important;
+}
+gr-main-header {
+    background-color: var(--darkreader-background-add8e6, #1b4958) !important;
+}
+.tou-z65h9k,
+.tou-mignzq,
+.tou-1b6i2ox,
+.tou-lnqlqk {
+    background-color: var(--darkreader-neutral-background) !important;
+}
+.tou-75mvi {
+    background-color: var(--darkreader-background-cfecf5, #0f3946) !important;
+}
+.tou-ta9e87,
+.tou-1w3fhi0,
+.tou-1b8t2us,
+.tou-py7lfi,
+.tou-1lpmd9d,
+.tou-1frrtv8,
+.tou-17ezmgn {
+    background-color: var(--darkreader-background-f5f5f5, #1e2021) !important;
+}
+.tou-uknfeu {
+    background-color: var(--darkreader-background-faedda, #432b09) !important;
+}
+.tou-6i3zyv {
+    background-color: var(--darkreader-background-85c3d8, #245c6f) !important;
+}
+div.mermaid-viewer-control-panel .btn {
+    background-color: var(--darkreader-neutral-background);
+    fill: var(--darkreader-neutral-text);
+}
+svg g rect.er {
+    fill: var(--darkreader-neutral-background) !important;
+}
+svg g rect.er.entityBox {
+    fill: var(--darkreader-neutral-background) !important;
+}
+svg g rect.er.attributeBoxOdd {
+    fill: var(--darkreader-neutral-background) !important;
+}
+svg g rect.er.attributeBoxEven {
+    fill: var(--darkreader-selection-background);
+    fill-opacity: 0.8 !important;
+}
+svg rect.er.relationshipLabelBox {
+    fill: var(--darkreader-neutral-background) !important;
+}
+svg g g.nodes rect,
+svg g g.nodes polygon {
+    fill: var(--darkreader-neutral-background) !important;
+}
+svg g rect.task {
+    fill: var(--darkreader-selection-background) !important;
+}
+svg line.messageLine0,
+svg line.messageLine1 {
+    stroke: var(--darkreader-neutral-text) !important;
+}
+div.mermaid .actor {
+    fill: var(--darkreader-neutral-background) !important;
+}
+mitid-authenticators-code-app > .code-app-container {
+    background-color: white !important;
+    padding-top: 1rem;
+}
+iframe#unpaywall[src$="unpaywall.html"] {
+    color-scheme: light !important;
+}
+select {
+    --darkreader-bg--form-control-background-color: rgba(22, 22, 22, 0) !important;
+}
+body#tumblr {
+    --darkreader-bg--secondary-accent: 31, 32, 34 !important;
+    --darkreader-bg--white: 23, 23, 23 !important;
+    --darkreader-text--black: 228, 224, 218 !important;
+}
+:host {
+    --d2l-border-color: var(--darkreader-bg--d2l-color-gypsum) !important;
+    --d2l-button-icon-background-color-hover: var(--darkreader-bg--d2l-color-gypsum) !important;
+    --d2l-color-ferrite: var(--darkreader-neutral-text) !important;
+    --d2l-color-sylvite: var(--darkreader-bg--d2l-color-sylvite) !important;
+    --d2l-dropdown-background-color: var(--darkreader-neutral-background) !important;
+    --d2l-dropdown-border-color: var(--darkreader-border--d2l-color-mica) !important;
+    --d2l-input-backgroud-color: var(--darkreader-neutral-background) !important;
+    --d2l-menu-border-color: var(--darkreader-bg--d2l-color-gypsum) !important;
+    --d2l-tooltip-background-color: var(--darkreader-neutral-background) !important;
+    --d2l-tooltip-border-color: var(--darkreader-bg--d2l-color-gypsum) !important;
+}
+:host([_floating]) .d2l-floating-buttons-container {
+    background-color: var(--darkreader-neutral-background) !important;
+    border-top-color: var(--darkreader-border--d2l-color-mica) !important;
+    opacity: 0.88 !important;
+}
+d2l-card {
+    background: var(--darkreader-neutral-background) !important;
+    border-color: var(--darkreader-border--d2l-color-gypsum) !important;
+}
+d2l-dropdown-content > div,
+d2l-menu-item {
+    background-color: var(--darkreader-neutral-background) !important;
+    border-radius: 10px !important;
+}
+d2l-empty-state-simple {
+    border-color: var(--darkreader-bg--d2l-color-gypsum) !important;
+}
+.d2l-button-filter > ul > li > a.vui-button {
+    border-color: var(--darkreader-border--d2l-color-mica) !important;
+}
+.d2l-label-text:has(.d2l-button-subtle-content):hover,
+.d2l-label-text:has(.d2l-button-subtle-content):focus,
+.d2l-label-text:has(.d2l-button-subtle-content):active {
+    background-color: var(--darkreader-bg--d2l-color-gypsum) !important;
+}
+.d2l-navigation-centerer {
+    color: inherit !important;
+}
+.d2l-tabs-layout {
+    border-color: var(--darkreader-border--d2l-color-gypsum) !important;
+}
+.d2l-input,
+.d2l-calendar-date,
+.d2l-htmleditor-container {
+    background-color: var(--darkreader-neutral-background) !important;
+}
+.d2l-collapsible-panel {
+    border: 1px solid var(--darkreader-border--d2l-color-mica) !important;
+    border-radius: 0.4rem !important;
+}
+.d2l-collapsible-panel-divider {
+    border-bottom: 1px solid var(--darkreader-border--d2l-color-mica) !important;
+}
+.d2l-w2d-flex {
+    border-bottom: 2px solid var(--darkreader-border--d2l-color-mica) !important;
+}
+.d2l-collapsible-panel scrolled,
+.d2l-collapsible-panel-header,
+.d2l-w2d-collection-fixed {
+    background-color: var(--darkreader-neutral-background) !important;
+}
+.d2l-loading-spinner-bg {
+    fill: var(--darkreader-bg--d2l-color-gypsum) !important;
+}
+.d2l-loading-spinner-bg-stroke {
+    stroke: var(--darkreader-border--d2l-color-mica) !important;
+}
+.d2l-loading-spinner-wrapper svg path,
+.d2l-loading-spinner-wrapper svg circle {
+    fill: var(--darkreader-neutral-background) !important;
+}
+.d2l-twopanelselector-side.d2l-twopanelselector-side-sep {
+    background: var(--darkreader-bg--d2l-color-mica) !important;
+}
+.d2l-le-TreeAccordionItem-anchor::before {
+    background: var(--darkreader-bg--d2l-color-corundum) !important;
+}
+table[class|="moz-header"] {
+    background: none;
+}
+*[style*="color: rgba(0,0,0,"]:not([style*="color: rgba(0,0,0,0)"]),
+*[style*="color: rgba(0, 0, 0,"]:not([style*="color: rgba(0, 0, 0, 0)"]),
+*[style*="color:#000"]:not(.cell-input > span),
+*[style*="color:black"]:not(.cell-input > span),
+*[style*="color:#282828"]:not(.cell-input > span),
+*[style*="color:#444"]:not(.cell-input > span),
+*[style*="color: #222222"]:not(.cell-input > span) {
+    color: var(--darkreader-neutral-text) !important;
+}
+*[style*="background:#fff"],
+*[style*="background-color:#fff"],
+*[style*="background: #fff"],
+*[style*="background: rgb(255, 255, 255)"] {
+    background: var(--darkreader-neutral-background) !important;
+}
+*[bgcolor="#F5F5F5"],
+*[style*="background-color: #F5F5F5"] {
+    background: var(--darkreader-background-f5f5f5, #1e2021) !important;
+}
+*[style*="background: #e6e6e6"] {
+    background: var(--darkreader-background-e6e6e6, #26292b) !important;
+}
+body[style*="background: rgb(255, 255, 255) !important"] *:not(a),
+.body[style*="background-color: rgb(254, 254, 254) !important"] *:not(a) {
+    background-color: var(--darkreader-neutral-background) !important;
+}
+div[style*="www.gstatic.com/android/"] {
+    background: none !important;
+}
+*[style*="background:#f9f9f9"] {
+    background: var(--darkreader-background-f9f9f9, #1b1e1f) !important;
+}
+body.mediawiki.skin-vector #mw-page-base {
+    background-image: none !important;
+}
+.overflow-hidden .spinning-bg,
+.overflow-hidden .solid-bg {
+    background: transparent !important;
+}
+*[style*="color: rgb(0,0,0) !imoprtant"][style*="--darkreader-inline-color"],
+*[style*="color: rgb(0, 0, 0) !important"][style*="--darkreader-inline-color"] {
+    -webkit-text-fill-color: var(--darkreader-inline-color) !important;
+}</style></head><body __processed_687d717e-1efc-4c1f-8421-c176757a2412__="true" bis_register="W3sibWFzdGVyIjp0cnVlLCJleHRlbnNpb25JZCI6ImVwcGlvY2VtaG1ubGJoanBsY2drb2ZjaWllZ29tY29uIiwiYWRibG9ja2VyU3RhdHVzIjp7IkRJU1BMQVkiOiJlbmFibGVkIiwiRkFDRUJPT0siOiJlbmFibGVkIiwiVFdJVFRFUiI6ImVuYWJsZWQiLCJSRURESVQiOiJlbmFibGVkIiwiUElOVEVSRVNUIjoiZW5hYmxlZCIsIklOU1RBR1JBTSI6ImVuYWJsZWQiLCJUSUtUT0siOiJlbmFibGVkIiwiTElOS0VESU4iOiJlbmFibGVkIiwiQ09ORklHIjoiZGlzYWJsZWQifSwidmVyc2lvbiI6IjIuMy4wIiwic2NvcmUiOjIwMzAwMH1d"><header><nav class="navbar navbar-default mb0">
+  <div class="container-fluid" bis_skin_checked="1">
+    <!-- Brand and toggle get grouped for better mobile display -->
+    <div class="navbar-header" bis_skin_checked="1">
+      <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#bs-example-navbar-collapse-1" aria-expanded="false">
+        <span class="sr-only">Toggle navigation</span>
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+      </button>
+      <a class="navbar-brand hidden-lg hidden-md" href="https://rrc.cvc.uab.es/?ch=17&amp;com=downloads#">R.R.C.</a>
+      <a class="navbar-brand hidden-xs hidden-sm" href="https://rrc.cvc.uab.es/?ch=17&amp;com=downloads#">Robust Reading Competition</a>
+    </div>
+
+    <!-- Collect the nav links, forms, and other content for toggling -->
+    <div class="collapse navbar-collapse" id="bs-example-navbar-collapse-1" bis_skin_checked="1">
+      <ul class="nav navbar-nav">
+        <li class=""><a href="https://rrc.cvc.uab.es/">Home <span class="sr-only">(current)</span></a></li>
+        <li class="dropdown active">
+          <a href="https://rrc.cvc.uab.es/?ch=17&amp;com=downloads#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">Challenges <span class="caret"></span></a>
+          <ul class="dropdown-menu"><li data-ch="34" class="challenge  new"><a class="new" href="https://rrc.cvc.uab.es/?ch=34&amp;com=downloads"><span class="chname">DocVQA 2026</span><span class="year">2026</span></a></li><li data-ch="32" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=32&amp;com=downloads"><span class="chname">MapText</span><span class="year">2025</span></a></li><li data-ch="31" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=31&amp;com=downloads"><span class="chname">Comics Understanding</span><span class="year">2025</span></a></li><li data-ch="33" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=33&amp;com=downloads"><span class="chname">NoTeS</span><span class="year">2025</span></a></li><li data-ch="29" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=29&amp;com=downloads"><span class="chname">Occluded RoadText</span><span class="year">2024</span></a></li><li data-ch="28" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=28&amp;com=downloads"><span class="chname">MapText</span><span class="year">2024</span></a></li><li data-ch="27" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=27&amp;com=downloads"><span class="chname">HR-Ciphers</span><span class="year">2024</span></a></li><li data-ch="17" class="challenge  selected active"><a class=" selected active" href="https://rrc.cvc.uab.es/?ch=17&amp;com=downloads"><span class="chname">DocVQA</span><span class="year">2020-23</span></a></li><li data-ch="20" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=20&amp;com=downloads"><span class="chname">ReST</span><span class="year">2023</span></a></li><li data-ch="21" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=21&amp;com=downloads"><span class="chname">SVRD</span><span class="year">2023</span></a></li><li data-ch="22" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=22&amp;com=downloads"><span class="chname">DSText</span><span class="year">2023</span></a></li><li data-ch="23" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=23&amp;com=downloads"><span class="chname">DUDE 😎</span><span class="year">2023</span></a></li><li data-ch="24" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=24&amp;com=downloads"><span class="chname">NewsVideoQA</span><span class="year">2023</span></a></li><li data-ch="25" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=25&amp;com=downloads"><span class="chname">RoadText</span><span class="year">2023</span></a></li><li data-ch="26" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=26&amp;com=downloads"><span class="chname">DocILE</span><span class="year">2023</span></a></li><li data-ch="18" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=18&amp;com=downloads"><span class="chname">HierText</span><span class="year">2022</span></a></li><li data-ch="19" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=19&amp;com=downloads"><span class="chname">Out of Vocabulary</span><span class="year">2022</span></a></li><li data-ch="11" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=11&amp;com=downloads"><span class="chname">ST-VQA</span><span class="year">2019</span></a></li><li data-ch="15" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=15&amp;com=downloads"><span class="chname">MLT</span><span class="year">2019</span></a></li><li data-ch="16" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=16&amp;com=downloads"><span class="chname">LSVT</span><span class="year">2019</span></a></li><li data-ch="14" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=14&amp;com=downloads"><span class="chname">ArT</span><span class="year">2019</span></a></li><li data-ch="13" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=13&amp;com=downloads"><span class="chname">SROIE</span><span class="year">2019</span></a></li><li data-ch="12" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=12&amp;com=downloads"><span class="chname">ReCTS</span><span class="year">2019</span></a></li><li data-ch="5" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=5&amp;com=downloads"><span class="chname">COCO-Text</span><span class="year">2017</span></a></li><li data-ch="9" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=9&amp;com=downloads"><span class="chname">DeTEXT</span><span class="year">2017</span></a></li><li data-ch="7" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=7&amp;com=downloads"><span class="chname">DOST</span><span class="year">2017</span></a></li><li data-ch="6" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=6&amp;com=downloads"><span class="chname">FSNS</span><span class="year">2017</span></a></li><li data-ch="8" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=8&amp;com=downloads"><span class="chname">MLT</span><span class="year">2017</span></a></li><li data-ch="10" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=10&amp;com=downloads"><span class="chname">IEHHR</span><span class="year">2017</span></a></li><li data-ch="4" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=4&amp;com=downloads"><span class="chname">Incidental Scene Text</span><span class="year">2015</span></a></li><li data-ch="3" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=3&amp;com=downloads"><span class="chname">Text in Videos</span><span class="year">2013-2015</span></a></li><li data-ch="2" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=2&amp;com=downloads"><span class="chname">Focused Scene Text</span><span class="year">2013-2015</span></a></li><li data-ch="1" class="challenge "><a class="" href="https://rrc.cvc.uab.es/?ch=1&amp;com=downloads"><span class="chname">Born-Digital Images (Web and Email)</span><span class="year">2011-2015</span></a></li></ul></li><li class=""><a href="https://rrc.cvc.uab.es/?com=contestant">User</a></li>
+        
+      </ul>
+   </div> 
+  </div> <div id="div_wrap_challenge" bis_skin_checked="1"><ul class="challenge current" id="ul_ch_17"><span id="span_title" class="chname">DocVQA 2020-23</span><li><a class="" href="https://rrc.cvc.uab.es/?ch=17&amp;com=introduction">Overview</a></li><li><a class="" href="https://rrc.cvc.uab.es/?ch=17&amp;com=tasks">Tasks</a></li><li><a class="selected" href="https://rrc.cvc.uab.es/?ch=17&amp;com=downloads">Downloads</a></li><li><a class="" href="https://rrc.cvc.uab.es/?ch=17&amp;com=evaluation">Results</a></li><li><a class="" href="https://rrc.cvc.uab.es/?ch=17&amp;com=mymethods">My Methods</a></li><li><a class="" href="https://rrc.cvc.uab.es/?ch=17&amp;com=contact">Organizers</a></li></ul></div></nav></header><ul class="breadcrumb mb0"><li><a href="https://rrc.cvc.uab.es/?com=introduction">Home</a></li><li><a href="https://rrc.cvc.uab.es/?ch=17">DocVQA</a></li><li class="active">Downloads</li></ul><main class="challenge footer"><div id="content" class="container-fluid" bis_skin_checked="1"><div id="wrap_content" bis_skin_checked="1"><div class="col-md-8 col-lg-9 fb" bis_skin_checked="1"><h1>Downloads - Document Visual Question Answering</h1><h2><strong>Terms and Conditions</strong></h2>
+
+<p>By downloading the image data and annotations from the below URLs, you agree to the following terms and conditions:</p>
+
+<ol>
+	<li>You will NOT distribute the download URLs</li>
+	<li>The Computer Vision Center (CVC) and IIIT Hyderabad makes no representations or warranties regarding the data, including but not limited to warranties of non-infringement or fitness for a particular purpose.</li>
+	<li>You accept full responsibility for your use of the data and shall defend and indemnify Computer Vision Center (CVC) and IIIT Hyderabad including their employees, officers and agents, against any and all claims arising from your use of the data, including but not limited to your use of any copies of copyrighted images that you may create from the data.</li>
+	<li>All the images in DocVQA - Single Page Document VQA task, are&nbsp;pages of documents downloaded from <a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly93d3cuaW5kdXN0cnlkb2N1bWVudHMudWNzZi5lZHUv">UCSF Industry Documents Library.</a> Documents are from various collections spanning different industries such as tobacco, food, drug etc. Most of these documents' copyright is with the respective companies/trusts. We would like to clarify that we do not have rights over these documents and we host the data here purely for non-commercial, research and educational purposes only. You may read UCSF Industry Documents Library's, copyright and fair use policy <a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly93d3cuaW5kdXN0cnlkb2N1bWVudHMudWNzZi5lZHUvaGVscC9jb3B5cmlnaHQv">here</a></li>
+	<li>All the images provided for the DocVQA - Document Collection VQA task,&nbsp;are sourced from the <a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly93d3cucGRjLndhLmdvdi8=">Public Disclosure Commission (PDC)</a> documents. Information provided on the PDC website is considered public information and may be distributed or copied.&nbsp;We clarify that do not own the rights over these images, and that the document images are offered here purely for non-commercial research and educational purposes only.&nbsp;Downloading the datasets of DocCVQA, entails you have read and agree with the policy of PDC as described <a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly93d3cucGRjLndhLmdvdi9wcml2YWN5LW5vdGljZQ==">here</a>.</li>
+	<li>All images in DocVQA - Infographics VQA task, are infographic images sourced from internet. We do not own rights for these images and copyright is with respective creators. We share the urls for these images, so that other researchers can use them to download the images and use it along with our annotations for question-answers. We are sharing the URLs purely for non-commerical, research and education purposes.</li>
+	<li>The annotations offered along with the document images, are offered without any restrictions.</li>
+</ol>
+
+<p>&nbsp;</p>
+
+<h2><strong>Download</strong></h2>
+
+<p>&nbsp;</p>
+
+<h3><strong>Task 4&nbsp;- Multipage Document Visual Question Answering (MP-DocVQA)</strong></h3>
+
+<p>The dataset for Multipage DocVQA is available to download from the following URLs:</p>
+
+<ul>
+	<li>V1.0 uploaded on 19 February 2023. The dataset consists of&nbsp;46436 questions posed over 5929 documents with&nbsp;47952 pages in total. Besides the questions and answers, we also provide the document page images and the OCR extracted with Amazon Textract OCR of all the pages (64057) that belong to the documents within MP-DocVQA dataset, skipping the limitation of 20 pages. Hence, you can use longer versions of the documents with the same image and OCR quality if required.
+	<ul>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazQvcWFzLnppcA==">Questions and Answers</a></li>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazQvaW1hZ2VzLnRhci5neg==">Images</a></li>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazQvb2NyLnRhci5neg==">OCR results</a> (Amazon Textract)</li>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazQvbXBkb2N2cWFfaW1kYnMuemlw">IMDBs</a> (processed dataset for <a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9naXRodWIuY29tL3J1YmVucHQ5MS9NUC1Eb2NWUUEtRnJhbWV3b3Jr">MP-DocVQA framework</a>)</li>
+	</ul>
+	</li>
+</ul>
+
+<p>&nbsp;</p>
+
+<h3><strong>Task 1 - Single Page Document Visual Question Answering</strong></h3>
+
+<p>Dataset for Single Page Document VQA (SP-DocVQA) task&nbsp;is available to download at the below URLs.</p>
+
+<ul>
+	<li>[20 April 2020] train V1.0. Dataset released comprising 50,000 questions framed on 12,767 document images.</li>
+	<li>[31 August 2023] updated to include the training and validation question types.
+	<ul>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazEvc3Bkb2N2cWFfcWFzLnppcA==">Annotations</a>&nbsp;(questions, answers, <strong>question types</strong>...)</li>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazEvc3Bkb2N2cWFfaW1hZ2VzLnRhci5neg==">Images</a></li>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazEvc3Bkb2N2cWFfb2NyLnRhci5neg==">OCR</a>&nbsp;(Microsoft OCR)</li>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazEvc3Bkb2N2cWFfaW1kYi56aXA=">IMDBs</a> (processed dataset for <a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9naXRodWIuY29tL3J1YmVucHQ5MS9NUC1Eb2NWUUEtRnJhbWV3b3Jr">MP-DocVQA framework</a>)</li>
+	</ul>
+	</li>
+</ul>
+
+<p>&nbsp;</p>
+
+<h3><strong>Task 2 - Document Collection Visual Question Answering (DocCVQA)</strong></h3>
+
+<p>Document Collection Visual Question Answering (DocCVQA)&nbsp;is defined over a collection of documents, over which natural language questions (queries) are defined.</p>
+
+<p>We provide a series of sample queries along with the relevant documents for each one.</p>
+
+<ul>
+	<li>V0.1 uploaded on March 30, 2020. Comprises&nbsp;14,362&nbsp;document images, 8 sample queries and the list of relevant responses (document IDs) for each sample query.</li>
+	<li>V0.2 uploaded on April 23,&nbsp;2020. The candidate's names in the sample queries' answers have changed the format from 'Surname Name' to 'Name Surname' to be consistent with the names written in the document images. The test queries have been made public.
+	<ul>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazJfaW1hZ2VzLnppcA==">Image collection</a></li>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvc2FtcGxlX3B1YmxpY192MDIuanNvbg==">Sample queries and responses</a></li>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvdGVzdF9wdWJsaWMuanNvbg==">Test queries</a></li>
+	</ul>
+	</li>
+</ul>
+
+<p>We also provide evaluation scripts so that participants can evaluate their methods in the exact same way as on the server.</p>
+
+<ul>
+	<li>DocCVQA&nbsp;<a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazIlMjBldmFsdWF0aW9uJTIwc2NyaXB0LnppcA==">Evaluation scripts</a></li>
+</ul>
+
+<p>&nbsp;</p>
+
+<h3><strong>Task 3 - Infographics VQA</strong></h3>
+
+<p>Participants to download the images using the URLs provided in the JSON file.&nbsp;OCR outputs for each image are provided using using <a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9hd3MuYW1hem9uLmNvbS90ZXh0cmFjdC8=">Amazon Textract</a> OCR system. OCR outputs are auxiliary data; participants are free to use any OCR.</p>
+
+<p><strong>DISCLAIMER:&nbsp;</strong>All images provided here have been collected from freely accessible internet sites and social media. As such, they are copyrighted by their respective authors, and originally held at the URLs provided in the annotations files below. The images are hosted in this site, physically located in Spain, EU, under article 34 of the Spanish law of Intellectual Property. Specifically, the images are provided with the sole purpose to be used for research in developing new models for Document Visual Question Answering as defined in the present challenge.&nbsp;</p>
+
+<p><strong>TERMS AND CONDITIONS:</strong> You are not allowed to redistribute any images you download from this site. By downloading any of the files below you explicitly state that your final purpose is to perform research in the conditions mentioned above&nbsp;and you agree to adhering to these terms and conditions.</p>
+
+<p>&nbsp;</p>
+
+<ul>
+	<li><span style="color: rgb(149, 165, 166); --darkreader-inline-color: var(--darkreader-text-95a5a6, #aba398);" data-darkreader-inline-color="">[10 Nov 2020]&nbsp;train V0.1 was&nbsp;uploaded. Training a subset with around 10K questions defined on nearly 2,000 images.&nbsp;</span></li>
+	<li>[23 Dec 2020] train 1.0&nbsp;- 23946 questions;&nbsp;4406&nbsp;images.</li>
+	<li>[05 Jan 2021] val 1.0 - 2801 questions; 500 images.</li>
+	<li>[11 Feb 2021] test 1.0 - 3288&nbsp;questions; 579 images.</li>
+	<li>[31 August 2023] updated to include <strong>question types</strong> in validation set.
+	<ul>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazMvaW5mb2dyYXBoaWNzdnFhX3Fhcy56aXA=">Annotations</a>&nbsp;(questions, answer, <strong>question types</strong>...)</li>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazMvaW5mb2dyYXBoaWNzdnFhX29jci50YXIuZ3o=">OCR</a> (Amazon Textract)</li>
+		<li><a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazMvaW5mb2dyYXBoaWNzdnFhX2ltYWdlcy50YXIuZ3o=">Images</a></li>
+	</ul>
+	</li>
+</ul>
+
+<p>We also provide evaluation scripts so that participants can evaluate their methods in the exact same way as on the server.</p>
+
+<ul>
+	<li>Infographics VQA&nbsp;<a href="https://rrc.cvc.uab.es/?com=downloads&amp;action=download&amp;ch=17&amp;f=aHR0cHM6Ly9kYXRhc2V0cy5jdmMudWFiLmVzL3JyYy9Eb2NWUUEvVGFzazMlMjBldmFsdWF0aW9uJTIwc2NyaXB0LnppcA==">Evaluation scripts</a></li>
+</ul>
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+<ul>
+</ul>
+</div><div class="col-md-4 col-lg-3" bis_skin_checked="1"><div id="news" bis_skin_checked="1"><div class="panel panel-default" bis_skin_checked="1"><div class="panel-heading" bis_skin_checked="1"><h3 class="panel-title"><i class="fa fa-newspaper-o"></i> Challenge News</h3></div><div class="panel-body" bis_skin_checked="1"><ul class="news"><li><span class="date">09/01/2023</span><br><a href="https://rrc.cvc.uab.es/?com=news&amp;view=data&amp;id=67">QA Types made public</a></li><li><span class="date">02/19/2023</span><br><a href="https://rrc.cvc.uab.es/?com=news&amp;view=data&amp;id=54">Multipage DocVQA Dataset is public!</a></li><li><span class="date">03/31/2021</span><br><a href="https://rrc.cvc.uab.es/?com=news&amp;view=data&amp;id=43">ICDAR competition deadline extended</a></li><li><span class="date">02/11/2021</span><br><a href="https://rrc.cvc.uab.es/?com=news&amp;view=data&amp;id=42">Infographics Test Set Available</a></li><li><span class="date">08/01/2020</span><br><a href="https://rrc.cvc.uab.es/?com=news&amp;view=data&amp;id=41">The challenge continues in ICDAR 2021</a></li></ul></div></div></div><div id="important_dates" bis_skin_checked="1"><div class="panel panel-warning" bis_skin_checked="1"><div class="panel-heading" bis_skin_checked="1"><h3 class="panel-title"><i class="fa fa-calendar"></i> Important Dates</h3></div><div class="panel-body" bis_skin_checked="1"><p><strong>19 February 2023</strong>: MP-DocVQA Dataset released.</p>
+
+<p><strong>ICDAR 2021 edition</strong></p>
+
+<p><strong>6 September 2021</strong>: Presentation at the Document VQA workshop at ICDAR 2021</p>
+
+<p><strong>30 April 2021</strong>: Results available online</p>
+
+<p><strong>10 April 2021</strong>: Deadline for Competition submissions</p>
+
+<p><strong>11 February 2021</strong>: Test set available</p>
+
+<p><strong>23 December 2020</strong>: Release of full&nbsp;training data for Infographics VQA.</p>
+
+<p><strong>10 November 2020</strong>: Release of training data subset for new task "<strong>Infographics VQA</strong>"</p>
+
+<p>&nbsp;</p>
+
+<p><strong>CVPR 2020 edition</strong></p>
+
+<p><strong>16-18 June 2020</strong>:&nbsp;CVPR workshop</p>
+
+<p><strong>15 May 2020 (23:59 PST)</strong>:&nbsp;Submission of results</p>
+
+<p><strong>20 April 2020</strong>: Test set available</p>
+
+<p><strong>19 March 2020 : </strong>Text Transcriptions for Train_v0.1 Documents available</p>
+
+<p><strong>16 March 2020</strong>: Training set&nbsp;v0.1 available</p>
+</div></div></div></div></div></div><div class="clear" bis_skin_checked="1"></div></main><footer><div id="organizers" class="md10 " bis_skin_checked="1"><span class="title">Organizers</span><img id="logo" src="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/UAB.png" alt="Universitat Autonoma de Barcelona title=" universitat="" autonoma="" de="" barcelona"=""><img id="logo" src="./Downloads - Document Visual Question Answering - Robust Reading Competition_files/IIIT_Hyderabad.png" alt="IIIT, HYDERABAD title=" iiit,="" hyderabad"=""></div></footer>    
+</body></html>
