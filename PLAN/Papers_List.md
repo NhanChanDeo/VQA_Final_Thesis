@@ -1,9 +1,9 @@
-﻿# Danh Mục Bài Báo Nghiên Cứu (Downloaded Papers for CrossVQA)
+# Danh Mục Bài Báo Nghiên Cứu (Downloaded Papers for CrossVQA)
 
 > **Thư mục lưu trữ:** [`PLAN/Papers`](Papers)  
 > **Đề tài:** CrossVQA: Nghiên cứu chuyển giao tri thức liên miền từ ảnh tài liệu sang ảnh cảnh tự nhiên cho mô hình Thị giác–Ngôn ngữ  
 > **Bộ dữ liệu chính:** TextVQA (`facebook/textvqa`) & DocVQA (`lmms-lab/DocVQA`)  
-> **Thời điểm cập nhật:** 24/09/2026  
+> **Thời điểm cập nhật:** 10/10/2026  
 
 ---
 
@@ -160,3 +160,189 @@
 | **12** | [`Kil_2023_PreSTU.pdf`](Papers/Kil_2023_PreSTU.pdf) | PreSTU: Pre-Training for Scene-Text Understanding | Jihyung Kil et al. (2023) | ICCV 2023 | [`2209.05534`](https://arxiv.org/abs/2209.05534) | Pretrain đọc chữ (OCR-like) cho scene-text VQA, chuyển giao sang TextVQA/ST-VQA |
 | **13** | [`Ganz_2023_SeeAndRead.pdf`](Papers/Ganz_2023_SeeAndRead.pdf) | Towards Models that Can See and Read | Roy Ganz et al. (2023) | ICCV 2023 | [`2301.07389`](https://arxiv.org/abs/2301.07389) | Hợp nhất VQA và Image Captioning có đọc chữ (Scene-Text); cho thấy lợi ích chuyển giao đa tác vụ |
 | **14** | [`Ye_2023_UReader.pdf`](Papers/Ye_2023_UReader.pdf) | UReader: Universal OCR-free Visually-situated Language Understanding with Multimodal LLM | Jiabo Ye et al. (2023) | EMNLP 2023 Findings | [`2310.05126`](https://arxiv.org/abs/2310.05126) | MLLM OCR-free tinh chỉnh chung trên tài liệu, biểu đồ, ảnh tự nhiên; đánh giá DocVQA & TextVQA |
+
+---
+
+## 5. Bổ Sung: Bài Báo Về Quy Ước Tọa Độ Không Gian & Hộp Bao OCR (Spatial Coordinate & Grounding Conventions)
+
+> **Thời điểm cập nhật:** 06/10/2026
+
+| STT | Tên Tệp PDF | Tiêu Đề Bài Báo | Tác Giả & Năm | Nguồn / Hội Nghị | arXiv ID | Vai Trò trong Luận Văn |
+| :---: | :--- | :--- | :--- | :--- | :---: | :--- |
+| **15** | [`Xu_2020_LayoutLM.pdf`](Papers/Xu_2020_LayoutLM.pdf) | LayoutLM: Pre-training of Text and Layout for Document Image Understanding | Yang Xu et al. (2020) | KDD 2020 | [`1912.13318`](https://arxiv.org/abs/1912.13318) | **Spatial Embedding Baseline**: Tiên phong chuẩn hóa tọa độ hộp bao OCR về thang rời rạc $[0, 1000]$ cho 2D spatial embeddings trong Transformer |
+| **16** | [`Chen_2022_Pix2seq.pdf`](Papers/Chen_2022_Pix2seq.pdf) | Pix2seq: A Language Modeling Framework for Object Detection | Ting Chen et al. (2022) | ICLR 2022 | [`2109.10852`](https://arxiv.org/abs/2109.10852) | **Spatial Sequence Modeling**: Chuẩn hóa biểu diễn hộp bao dạng chuỗi $[ymin, xmin, ymax, xmax]$ lượng tử hóa 1000 bins cho ngôn ngữ sinh tự hồi quy |
+| **17** | [`Chen_2022_PaLI.pdf`](Papers/Chen_2022_PaLI.pdf) | PaLI: A Jointly-Scaled Multilingual Language-Image Model | Xi Chen et al. (2023) | ICLR 2023 | [`2209.06794`](https://arxiv.org/abs/2209.06794) | **Spatial Location Tokens**: Chuẩn hóa cơ chế gán token vị trí chuyên biệt $\langle\text{loc}Y_{min}\rangle\langle\text{loc}X_{min}\rangle\langle\text{loc}Y_{max}\rangle\langle\text{loc}X_{max}\rangle$ làm nền tảng cho PaLI-X và PaliGemma |
+
+### Chi Tiết Từng Bài Báo & Ý Nghĩa Trích Dẫn
+
+#### 15. LayoutLM: Pre-training of Text and Layout for Document Image Understanding
+* **Tệp:** [`Xu_2020_LayoutLM.pdf`](Papers/Xu_2020_LayoutLM.pdf)
+* **Tác giả:** Yang Xu, Minghao Li, Lei Cui, Shaohan Huang, Furu Wei, Ming Zhou (Microsoft Research Asia)
+* **arXiv / DOI:** [arXiv:1912.13318](https://arxiv.org/abs/1912.13318) | KDD 2020
+* **Nội dung chính:**
+  - Mô hình nền tảng đầu tiên kết hợp thông tin vị trí không gian 2D (2D layout spatial embeddings) cùng ngữ nghĩa văn bản trong kiến trúc Transformer cho Document AI.
+  - Chuẩn hóa toàn bộ tọa độ bounding box OCR từ pixel thực về không gian số nguyên rời rạc $[0, 1000]$:
+    $$x_0 = \left\lfloor \frac{x_{\text{min}}}{W} \times 1000 \right\rfloor, \quad y_0 = \left\lfloor \frac{y_{\text{min}}}{H} \times 1000 \right\rfloor, \quad x_1 = \left\lfloor \frac{x_{\text{max}}}{W} \times 1000 \right\rfloor, \quad y_1 = \left\lfloor \frac{y_{\text{max}}}{H} \times 1000 \right\rfloor$$
+* **Vị trí trích dẫn:** Chương 2 (Biểu diễn không gian & Layout-aware VLM), Chương 3 (Quy chuẩn thiết kế Canonical Schema $[0, 1000]$ cho hộp bao OCR).
+
+---
+
+#### 16. Pix2seq: A Language Modeling Framework for Object Detection
+* **Tệp:** [`Chen_2022_Pix2seq.pdf`](Papers/Chen_2022_Pix2seq.pdf)
+* **Tác giả:** Ting Chen, Saurabh Saxena, Lala Li, David J. Fleet, Geoffrey Hinton (Google Research, Brain Team)
+* **arXiv / DOI:** [arXiv:2109.10852](https://arxiv.org/abs/2109.10852) | ICLR 2022
+* **Nội dung chính:**
+  - Định hình bài toán phát hiện vật thể và định vị hình học dưới lăng kính bài toán mô hình hóa ngôn ngữ (Language Modeling).
+  - Chuẩn hóa thứ tự biểu diễn tọa độ 4 chiều: $[ymin, xmin, ymax, xmax]$ được rời rạc hóa thành 1,000 bins số nguyên.
+  - Cung cấp cơ sở lý thuyết cho việc xử lý hộp bao như các chuỗi token ngôn ngữ tự nhiên.
+* **Vị trí trích dẫn:** Chương 2 (Language Modeling for Vision Tasks), Chương 3 (Quy ước thứ tự tọa độ $[ymin, xmin, ymax, xmax]$ trong `canonical_schema.py`).
+
+---
+
+#### 17. PaLI: A Jointly-Scaled Multilingual Language-Image Model
+* **Tệp:** [`Chen_2022_PaLI.pdf`](Papers/Chen_2022_PaLI.pdf)
+* **Tác giả:** Xi Chen, Xiao Wang, Soravit Changpinyo, AJ Piergiovanni, Piotr Padlewski et al. (Google Research)
+* **arXiv / DOI:** [arXiv:2209.06794](https://arxiv.org/abs/2209.06794) | ICLR 2023
+* **Nội dung chính:**
+  - Mở rộng khả năng của mô hình đa phương thức ngôn ngữ–thị giác quy mô lớn (lên tới 17B tham số) hỗ trợ hơn 100 ngôn ngữ.
+  - Thiết lập chuẩn tokenization vị trí: biểu diễn hộp bao qua 1000 spatial location tokens đặc biệt `[<loc0000>, ..., <loc1000>]` xếp theo thứ tự $[ymin, xmin, ymax, xmax]$, kế thừa trực tiếp trong kiến trúc PaliGemma.
+* **Vị trí trích dẫn:** Chương 2 (Kiến trúc VLM thế hệ mới), Chương 3 (Thiết kế token vị trí cho Vision-Language Grounding).
+
+---
+
+### Danh Mục BibTeX Trích Dẫn Bổ Sung
+
+```bibtex
+@inproceedings{xu2020layoutlm,
+  title     = {LayoutLM: Pre-training of Text and Layout for Document Image Understanding},
+  author    = {Xu, Yang and Li, Minghao and Cui, Lei and Huang, Shaohan and Wei, Furu and Zhou, Ming},
+  booktitle = {Proceedings of the 26th ACM SIGKDD International Conference on Knowledge Discovery \& Data Mining (KDD)},
+  pages     = {1192--1200},
+  year      = {2020},
+  doi       = {10.1145/3394486.3403172}
+}
+
+@inproceedings{chen2022pix2seq,
+  title     = {Pix2seq: A Language Modeling Framework for Object Detection},
+  author    = {Chen, Ting and Saxena, Saurabh and Li, Lala and Fleet, David J and Hinton, Geoffrey},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2022},
+  url       = {https://openreview.net/forum?id=nNO6SNBs14Z}
+}
+
+@inproceedings{chen2023pali,
+  title     = {PaLI: A Jointly-Scaled Multilingual Language-Image Model},
+  author    = {Chen, Xi and Wang, Xiao and Changpinyo, Soravit and Piergiovanni, AJ and Padlewski, Piotr and Salz, Daniel and Goodman, Sebastian and Grycner, Adam and Mustafa, Basil and Beyer, Lucas and others},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2023},
+  url       = {https://openreview.net/forum?id=adSSmdd3tl}
+}
+```
+
+---
+
+## 6. Bổ Sung: Bài Báo Về Vấn Đề Phân Tách Dữ Liệu & Rò Rỉ / Ô Nhiễm Benchmark (Dataset Split & Benchmark Leakage)
+
+> **Thư mục lưu trữ con:** [`PLAN/Papers/Dataset_Split_Issue`](Papers/Dataset_Split_Issue)  
+> **Thời điểm cập nhật:** 10/10/2026
+
+| STT | Tên Tệp PDF | Tiêu Đề Bài Báo | Tác Giả & Năm | Nguồn / Hội Nghị | arXiv ID | Vai Trò trong Luận Văn |
+| :---: | :--- | :--- | :--- | :--- | :---: | :--- |
+| **18** | [`Kapoor_2023_Data_Leakage.pdf`](Papers/Dataset_Split_Issue/Kapoor_2023_Data_Leakage.pdf) | Leakage and the Reproducibility Crisis in Machine Learning-Based Science | Sayash Kapoor & Arvind Narayanan (2023) | Patterns (Cell Press) 2023 | [`2207.07048`](https://arxiv.org/abs/2207.07048) | **Lý thuyết Rò rỉ Dữ liệu & Phân tách Nhóm**: Khung phân loại 8 loại data leakage; cơ sở lý luận cho phân chia nhóm (Group-based split theo `image_id` và `ucsf_document_id`) để chống rò rỉ |
+| **19** | [`Wang_2024_Both_Text_and_Images_Leaked.pdf`](Papers/Dataset_Split_Issue/Wang_2024_Both_Text_and_Images_Leaked.pdf) | Both Text and Images Leaked! A Systematic Analysis of Data Contamination in Multimodal LLM | MM-Detect Team (2024) | EMNLP 2025 Findings | [`2411.03823`](https://arxiv.org/abs/2411.03823) | **Ô nhiễm Dữ liệu Đa phương thức**: Phân tích rò rỉ unimodal và cross-modal trên benchmark VQA (trong đó có TextVQA); cơ sở kiểm toán nhiễm dữ liệu tiền huấn luyện ở Chương 4 |
+| **20** | [`Li_2024_LMMs_Eval.pdf`](Papers/Dataset_Split_Issue/Li_2024_LMMs_Eval.pdf) | LMMs-Eval: Accelerating the Development of Large Multimodal Models | Bo Li et al. (2024) | arXiv 2024 | [`2407.12772`](https://arxiv.org/abs/2407.12772) | **Chuẩn hóa Đánh giá Benchmark**: Framework đánh giá chuẩn cho VLM mã nguồn mở; quy định TextVQA-val (5.000) và DocVQA-val (5.349) là tập benchmark chuẩn, minh chứng thực tiễn đánh giá |
+| **21** | [`Agrawal_2018_VQA_CP.pdf`](Papers/Dataset_Split_Issue/Agrawal_2018_VQA_CP.pdf) | Don't Just Assume; Look and Answer: Overcoming Priors for Visual Question Answering (VQA-CP) | Aishwarya Agrawal et al. (2018) | CVPR 2018 | [`1712.00377`](https://arxiv.org/abs/1712.00377) | **Thiên lệch Phân tách Dữ liệu VQA**: Bài báo kinh điển chứng minh phân tách ngẫu nhiên gây rò rỉ tiên nghiệm câu hỏi–đáp án; luận giải sự cần thiết của thiết kế split có kiểm soát |
+
+### Chi Tiết Từng Bài Báo & Ý Nghĩa Trích Dẫn
+
+#### 18. Leakage and the Reproducibility Crisis in Machine Learning-Based Science
+* **Tệp:** [`Kapoor_2023_Data_Leakage.pdf`](Papers/Dataset_Split_Issue/Kapoor_2023_Data_Leakage.pdf)
+* **Tác giả:** Sayash Kapoor, Arvind Narayanan (Center for Information Technology Policy, Princeton University)
+* **arXiv / DOI:** [arXiv:2207.07048](https://arxiv.org/abs/2207.07048) | *Patterns*, Cell Press (2023)
+* **Nội dung chính:**
+  - Khảo sát hệ thống về khủng hoảng tái lập do rò rỉ dữ liệu (data leakage) trên 17 lĩnh vực khoa học sử dụng machine learning.
+  - Phân loại chi tiết 8 dạng rò rỉ dữ liệu, trong đó nhấn mạnh rò rỉ do phụ thuộc giữa các mẫu cùng nhóm (lack of group independence across splits). Khi một thực thể (ví dụ: một bức ảnh hoặc một tài liệu đa trang) có nhiều câu hỏi liên kết mà bị chia ngẫu nhiên vào cả train và test/dev, mô hình sẽ học thuộc đặc trưng ảnh thay vì học năng lực suy luận.
+  - Đề xuất mô hình thông tin chuẩn (model info sheets) để kiểm soát rò rỉ trước khi công bố.
+* **Vị trí trích dẫn trong Luận văn:**
+  - **Chương 3 (Pha B - Phương pháp phân tách dữ liệu chống rò rỉ):** Cung cấp cơ sở học thuật vững chắc cho việc bắt buộc sử dụng `GroupShuffleSplit` (nhóm theo `image_id` cho TextVQA và `ucsf_document_id` cho DocVQA) thay vì chia ngẫu nhiên ngây thơ.
+  - **Chương 5 (Mối đe dọa tính hợp lệ - Internal Validity):** Luận giải cách đề tài triệt tiêu rò rỉ giữa train và validation.
+
+---
+
+#### 19. Both Text and Images Leaked! A Systematic Analysis of Data Contamination in Multimodal LLM
+* **Tệp:** [`Wang_2024_Both_Text_and_Images_Leaked.pdf`](Papers/Dataset_Split_Issue/Wang_2024_Both_Text_and_Images_Leaked.pdf)
+* **Tác giả:** MM-Detect Team
+* **arXiv / DOI:** [arXiv:2411.03823](https://arxiv.org/abs/2411.03823) | Findings of EMNLP 2025
+* **Nội dung chính:**
+  - Nghiên cứu có tính hệ thống đầu tiên về hiện tượng ô nhiễm dữ liệu (data contamination) và rò rỉ benchmark trên các mô hình Đa phương thức Lớn (MLLM).
+  - Chỉ ra rằng các tập benchmark VQA phổ biến (như TextVQA) thường xuyên bị thu thập vào kho dữ liệu tiền huấn luyện web-scale.
+  - Đưa ra khung phân tích **MM-Detect** phân biệt rõ rò rỉ đơn phương thức (unimodal leakage) và rò rỉ chéo phương thức (cross-modal leakage).
+* **Vị trí trích dẫn trong Luận văn:**
+  - **Chương 4 (Pha C - Kiểm toán rò rỉ tiền huấn luyện / Contamination Audit):** Dẫn chứng khoa học lý giải vì sao đề tài không sử dụng các mô hình đã qua tinh chỉnh VQA thương mại (như PaliGemma-FT, LLaVA-1.5 fine-tuned) mà chỉ dùng checkpoint nền tảng (Base) để đảm bảo tính trong sạch của chuyển giao tri thức liên miền.
+
+---
+
+#### 20. LMMs-Eval: Accelerating the Development of Large Multimodal Models
+* **Tệp:** [`Li_2024_LMMs_Eval.pdf`](Papers/Dataset_Split_Issue/Li_2024_LMMs_Eval.pdf)
+* **Tác giả:** Bo Li, Peiyuan Zhang, Kaichen Zhang et al.
+* **arXiv / DOI:** [arXiv:2407.12772](https://arxiv.org/abs/2407.12772)
+* **Nội dung chính:**
+  - Bộ công cụ đánh giá chuẩn mực (standard evaluation harness) được cộng đồng VLM quốc tế (Hugging Face, LLaVA, Mistral, InternVL) áp dụng rộng rãi.
+  - Chuẩn hóa quy trình đánh giá TextVQA trên tập `textvqa_val` (5.000 mẫu) và DocVQA trên tập `docvqa_val` (5.349 mẫu), minh chứng rằng trong bối cảnh các server nộp bài kiểm thử đóng hoặc bảo mật nhãn, tập validation chính thức là thước đo học thuật được công nhận rộng rãi nhất.
+* **Vị trí trích dẫn trong Luận văn:**
+  - **Chương 2 (Các chuẩn đánh giá VLM) & Chương 4 (Thiết lập thực nghiệm):** Trích dẫn chuẩn mực đánh giá mở, giải thích và bảo vệ việc sử dụng tập `validation` chính thức làm tập kiểm thử độc lập cho kết quả công bố trong luận văn.
+
+---
+
+#### 21. Don't Just Assume; Look and Answer: Overcoming Priors for Visual Question Answering (VQA-CP)
+* **Tệp:** [`Agrawal_2018_VQA_CP.pdf`](Papers/Dataset_Split_Issue/Agrawal_2018_VQA_CP.pdf)
+* **Tác giả:** Aishwarya Agrawal, Dhruv Batra, Devi Parikh, Aniruddha Kembhavi (Georgia Tech, FAIR, Allen Institute for AI)
+* **arXiv / DOI:** [arXiv:1712.00377](https://arxiv.org/abs/1712.00377) | CVPR 2018
+* **Nội dung chính:**
+  - Bài báo kinh điển phát hiện lỗ hổng nghiêm trọng của cách phân tách tập dữ liệu ngẫu nhiên (random i.i.d splits) trong VQA: mô hình chỉ học thuộc phân phối tiên nghiệm của câu hỏi (question priors) thay vì thực sự nhìn vào ảnh.
+  - Đề xuất tái cấu trúc phân tách dữ liệu dưới dạng **Changing Priors (VQA-CP)** để phân phối câu trả lời ở tập train và test khác nhau, buộc mô hình phải suy luận thị giác thực chất.
+* **Vị trí trích dẫn trong Luận văn:**
+  - **Chương 2 (Tổng quan bài toán VQA và các thiên lệch dữ liệu):** Phân tích rủi ro của việc mô hình học vẹt câu hỏi nếu không có chiến lược phân tách dữ liệu và kiểm tra out-of-distribution (OOD) nghiêm ngặt.
+  - **Chương 3 (Thiết kế thực nghiệm chuyển giao miền Doc $\rightarrow$ Text):** Chứng minh năng lực chuyển giao thực chất từ tài liệu sang cảnh tự nhiên thay vì khai thác tiên nghiệm ngôn ngữ.
+
+---
+
+### Danh Mục BibTeX Trích Dẫn Bổ Sung (Dataset Split & Contamination)
+
+```bibtex
+@article{kapoor2023leakage,
+  title     = {Leakage and the Reproducibility Crisis in Machine Learning-Based Science},
+  author    = {Kapoor, Sayash and Narayanan, Arvind},
+  journal   = {Patterns},
+  volume    = {4},
+  number    = {9},
+  pages     = {100804},
+  year      = {2023},
+  publisher = {Elsevier},
+  doi       = {10.1016/j.patter.2023.100804}
+}
+
+@article{wang2024both,
+  title     = {Both Text and Images Leaked! A Systematic Analysis of Data Contamination in Multimodal LLM},
+  author    = {Wang, et al.},
+  journal   = {arXiv preprint arXiv:2411.03823},
+  year      = {2024}
+}
+
+@article{li2024lmms,
+  title     = {LMMs-Eval: Accelerating the Development of Large Multimodal Models},
+  author    = {Li, Bo and Zhang, Peiyuan and Zhang, Kaichen and others},
+  journal   = {arXiv preprint arXiv:2407.12772},
+  year      = {2024}
+}
+
+@inproceedings{agrawal2018dont,
+  title     = {Don't Just Assume; Look and Answer: Overcoming Priors for Visual Question Answering},
+  author    = {Agrawal, Aishwarya and Batra, Dhruv and Parikh, Devi and Kembhavi, Aniruddha},
+  booktitle = {Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {4971--4980},
+  year      = {2018}
+}
+```
+
+
