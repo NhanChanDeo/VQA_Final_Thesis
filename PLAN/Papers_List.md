@@ -2,7 +2,7 @@
 
 > **Thư mục lưu trữ:** [`PLAN/Papers`](Papers)  
 > **Đề tài:** CrossVQA: Nghiên cứu chuyển giao tri thức liên miền từ ảnh tài liệu sang ảnh cảnh tự nhiên cho mô hình Thị giác–Ngôn ngữ  
-> **Bộ dữ liệu chính:** TextVQA (`facebook/textvqa`) & DocVQA (`lmms-lab/DocVQA`)  
+> **Bộ dữ liệu chính (Canonical):** [`gamusa/textvqa-canonical`](https://huggingface.co/datasets/gamusa/textvqa-canonical) & [`gamusa/docvqa-canonical`](https://huggingface.co/datasets/gamusa/docvqa-canonical) *(Kế thừa từ nguyên bản TextVQA v0.5.1 & SP-DocVQA Task 1)*  
 > **Thời điểm cập nhật:** 10/10/2026  
 
 ---

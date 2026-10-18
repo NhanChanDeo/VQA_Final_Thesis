@@ -10,7 +10,7 @@ Metric đánh giá performance của mô hình (dự kiến): ANLS (Average Norm
 Nhận xét, kết luận và đánh giá triển vọng ứng dụng và phát triển mô hình.
 
 
-Cơ sở dữ liệu ban đầu:
+Cơ sở dữ liệu thô ban đầu (Upstream Sources):
 TextVQA (huggingface: facebook/textvqa)
 Nguồn ảnh: lấy từ tập OpenImages
 
@@ -59,3 +59,10 @@ ucsf_document_id : Value('string')
 ucsf_document_page_no : Value('string')
 answers : List(Value('string'))
 data_split : Value('string')
+
+---
+
+### Bộ dữ liệu thực nghiệm đã chuẩn hóa (Canonical Repositories):
+Toàn bộ dữ liệu thô từ hai nguồn upstream trên đã được chuẩn hóa thống nhất theo hợp đồng dữ liệu chuẩn (Unified Data Contract), tích hợp trích xuất OCR đầy đủ và bảo toàn chất lượng ảnh phục vụ huấn luyện chuyển giao liên miền:
+- **TextVQA Canonical:** [`gamusa/textvqa-canonical`](https://huggingface.co/datasets/gamusa/textvqa-canonical) (39.602 mẫu train/val, native JPEG bit-for-bit + Rosetta OCR)
+- **DocVQA Canonical:** [`gamusa/docvqa-canonical`](https://huggingface.co/datasets/gamusa/docvqa-canonical) (44.812 mẫu train/val, True Lossless PNG + MS Azure OCR)

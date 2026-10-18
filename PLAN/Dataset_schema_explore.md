@@ -8,7 +8,7 @@ Một nghiên cứu chuyển giao liên miền (Cross-Domain Transfer Learning) 
 
 Nhìn vào bản thảo của bạn, hai bộ dữ liệu này xuất phát từ hai bài toán và hai nhóm nghiên cứu khác nhau, dẫn đến **sự bất đối xứng cấu trúc (structural asymmetry)**:
 
-| Tiêu chí | TextVQA (`facebook/textvqa`) | DocVQA (`lmms-lab/DocVQA`) | Nhận xét từ Giảng viên & Hướng xử lý |
+| Tiêu chí | TextVQA nguyên bản (`facebook/textvqa`) | DocVQA nguyên bản (`lmms-lab/DocVQA`) | Nhận xét từ Giảng viên & Hướng xử lý |
 | :--- | :--- | :--- | :--- |
 | **Khóa định danh câu hỏi** | `question_id` (kiểu `int32`) | `questionId` (kiểu `string`) | Khác cả tên trường lẫn kiểu dữ liệu. Khi hợp nhất bắt buộc ép kiểu sang `string` (ví dụ: tiền tố `textvqa_123` và `docvqa_456`). |
 | **Định danh ảnh/tài liệu** | `image_id` (`string`) | `docId` (`int64`), `ucsf_document_id`, `ucsf_document_page_no` | TextVQA là 1 ảnh độc lập; DocVQA là một trang tài liệu nằm trong một hồ sơ (`ucsf_document_id`). Cần tạo `sample_id` duy nhất. |
@@ -16,6 +16,12 @@ Nhìn vào bản thảo của bạn, hai bộ dữ liệu này xuất phát từ
 | **Nhãn câu trả lời (`answers`)** | `List[string]` (luôn có **10 câu trả lời** từ 10 annotators) | `List[string]` (từ **1 đến vài câu trả lời** tương đương ngữ nghĩa) | **Rất quan trọng!** Bản chất nhãn khác nhau dẫn đến hàm mất mát (loss) và metric đánh giá khác nhau. |
 | **Đặc trưng phân loại** | `image_classes` (thể loại ảnh OpenImages) | `question_types` (loại câu hỏi tài liệu) | TextVQA gắn nhãn ngữ cảnh vật thể; DocVQA gắn nhãn logic câu hỏi (bảng biểu, form, text xuôi). |
 | **Thông tin OCR & Bounding Box** | **Thiếu** trong HF Dataset cơ bản (chỉ có `question_tokens`) | **Thiếu** trong HF Dataset cơ bản | **CẢNH BÁO LỚN:** Cả hai bản tải trên Hugging Face đều chỉ có ảnh thô + text. Nếu bạn dùng mô hình **OCR-based**, bạn phải trích xuất hoặc tải thêm file OCR bổ trợ (Rosetta/Textract). |
+
+> [!NOTE]
+> **Lưu ý về nguồn dữ liệu & phiên bản Canonical:**  
+> Bảng đối chiếu trên phân tích hiện trạng bất đối xứng của 2 bộ dữ liệu **thô ban đầu** (`facebook/textvqa` và `lmms-lab/DocVQA`). Đây chính là cơ sở và động lực thúc đẩy đề xuất **Unified Data Contract** tại [Mục III](#iii-đề-xuất-kiến-trúc-unified-data-contract-chuẩn-hóa-dữ-liệu). Toàn bộ dữ liệu sau khi chuẩn hóa, đồng nhất schema và tích hợp OCR hoàn chỉnh hiện đã được phát hành tại hai repo canonical chính thức:
+> - [`gamusa/textvqa-canonical`](https://huggingface.co/datasets/gamusa/textvqa-canonical)
+> - [`gamusa/docvqa-canonical`](https://huggingface.co/datasets/gamusa/docvqa-canonical)
 
 ---
 
@@ -77,12 +83,12 @@ class UnifiedVQAExample:
     ocr_tokens: Optional[List[str]] = None       # Danh sách các từ nhận diện được
     ocr_boxes: Optional[List[List[int]]] = None  # Tọa độ chuẩn hóa [ymin, xmin, ymax, xmax] trong thang [0, 1000]
     
-    # 4. Nhãn phục vụ Loss và Metric
-    raw_answers: List[str]   # Danh sách toàn bộ ground truth answers
-    canonical_answer: str    # Câu trả lời xuất hiện nhiều nhất (để tính Cross-Entropy Loss)
+    # 4. Nhãn phục vụ Loss và Metric (None khi chạy trên tập test không nhãn)
+    raw_answers: Optional[List[str]] = None   # Danh sách toàn bộ ground truth answers (None ở test split)
+    canonical_answer: Optional[str] = None    # Câu trả lời xuất hiện nhiều nhất (để tính Cross-Entropy Loss)
     
     # 5. Metadata bổ trợ cho phân tích lỗi (Error Analysis)
-    metadata: dict           # Chứa image_classes (TextVQA) hoặc question_types (DocVQA)
+    metadata: Optional[dict] = None           # Chứa image_classes (TextVQA) hoặc question_types (DocVQA)
 ```
 
 ---
