@@ -204,14 +204,17 @@ The technical core of the thesis training, evaluation, and deployment remains un
 
 ## 5. Git Status & Synchronization Discrepancies
 
-* **Local Commit State:** Local branch `main` is at commit `fbc5bec` (`add ds analysis Jupyter files`).
-* **Remote Commit State (`origin/main`):** Remote is **3 commits ahead**:
-  1. `8de5f00`: *Update notebook with results* ([`ANALYSIS/TextVQA_Analysis.ipynb`](ANALYSIS/TextVQA_Analysis.ipynb))
-  2. `e075a4a`: *Update notebook with results* ([`ANALYSIS/DocVQA_Analysis.ipynb`](ANALYSIS/DocVQA_Analysis.ipynb))
-  3. `8f99320`: *compared two ds* ([`ANALYSIS/CrossVQA_Comparative.ipynb`](ANALYSIS/CrossVQA_Comparative.ipynb))
-* **Local Unstaged Changes:**
-  * Modified: `.gitignore`, [`PLAN/Dataset_schema_explore.md`](PLAN/Dataset_schema_explore.md), [`PLAN/Papers_List.md`](PLAN/Papers_List.md), [`PLAN/ThesisPremise.md`](PLAN/ThesisPremise.md).
-  * Untracked: [`ANALYSIS/README.md`](ANALYSIS/README.md), [`ANALYSIS/build_colab_notebooks.py`](ANALYSIS/build_colab_notebooks.py), [`ANALYSIS/colab_vqa_analysis_plan.md`](ANALYSIS/colab_vqa_analysis_plan.md), [`ANALYSIS/hf_dataset_analyzer.py`](ANALYSIS/hf_dataset_analyzer.py), [`ANALYSIS/reports/`](ANALYSIS/reports/), and normalization plan documents in [`PLAN/`](PLAN/).
+* **Commit & Branch State:** Local branch `main` is at commit `c477466` (`update progress`) and is **up to date with `origin/main`**.
+* **Integrated Remote Results:** Colab notebook runs (`8de5f00`, `e075a4a`, `8f99320`) have been successfully merged into the local workspace.
+* **Working Tree State:**
+  * **Modified (Unstaged):** `.gitignore`
+  * **Untracked Analysis Assets:**
+    * [`ANALYSIS/README.md`](ANALYSIS/README.md), [`ANALYSIS/build_colab_notebooks.py`](ANALYSIS/build_colab_notebooks.py), [`ANALYSIS/colab_vqa_analysis_plan.md`](ANALYSIS/colab_vqa_analysis_plan.md), [`ANALYSIS/hf_dataset_analyzer.py`](ANALYSIS/hf_dataset_analyzer.py), [`ANALYSIS/reports/`](ANALYSIS/reports/)
+  * **Untracked Planning Documents:**
+    * [`PLAN/01-05-00_2026-10-05_CrossVQA_Normalization_Pipeline.md`](PLAN/01-05-00_2026-10-05_CrossVQA_Normalization_Pipeline.md)
+    * [`PLAN/02-15-00_2026-10-05_Data_Schema_Discrepancies_and_Handling_Strategies.md`](PLAN/02-15-00_2026-10-05_Data_Schema_Discrepancies_and_Handling_Strategies.md)
+    * [`PLAN/06-31-00_2026-10-09_CrossVQA_Inspection_and_Thesis_Execution_Plan.md`](PLAN/06-31-00_2026-10-09_CrossVQA_Inspection_and_Thesis_Execution_Plan.md)
+    * [`PLAN/Colab_DocVQA_TextVQA_Analysis_Plan.md`](PLAN/Colab_DocVQA_TextVQA_Analysis_Plan.md)
 
 ---
 
@@ -219,7 +222,7 @@ The technical core of the thesis training, evaluation, and deployment remains un
 
 ```mermaid
 flowchart TD
-    S1["1. Git Synchronize<br>(git pull origin main to integrate executed Colab notebooks)"] --> S2
+    S1["1. Stage & Commit Untracked Assets<br>(Commit untracked ANALYSIS/ scripts and reports)"] --> S2
     S2["2. Finalize Phase A Tasks A8-A10<br>(UMAP latent space, MMD/Proxy A-dist, Zero-shot Z0)"] --> S3
     S3["3. Implement Phase B: DATA_PIPELINE/<br>(GroupShuffleSplit dev split, Few-shot subsets, AnyRes tiling)"] --> S4
     S4["4. Implement Phase C: TRAIN/<br>(Backbone setup, Baselines B1-B5, CrossVQA LoRA M1-M3)"] --> S5
@@ -227,7 +230,10 @@ flowchart TD
     S6["6. Implement Phase E & Phase F<br>(Gradio/FastAPI demos + Thesis manuscript drafting)"]
 ```
 
-1. **Synchronize Git State:** Reconcile local unstaged files and run `git pull origin main` to incorporate executed notebook outputs into the local workspace.
-2. **Complete Phase A Remaining Tasks:** Run latent space feature extraction for UMAP (A8), compute MMD & Proxy $\mathcal{A}$-distance (A9), and obtain Zero-shot backbone scores (A10).
-3. **Begin Phase B Engineering:** Populate [`DATA_PIPELINE/`](DATA_PIPELINE/) with `grouped_split.py`, `anyres_tiler.py`, and PyTorch streaming DataLoaders.
-4. **Draft Chapter 2 of Thesis:** Transcribe empirical figures from Phase A into Chapter 2 (Literature Review & Empirical Domain Gap Quantification).
+1. **Commit Local Artifacts:** Stage and commit the untracked `ANALYSIS/` profiling tools, reports, and `.gitignore` to maintain complete reproducibility.
+2. **Execute Phase A Diagnostic Tasks (A8–A10):**
+   * **Task A8:** Multimodal latent space UMAP projection (ViT + LLM embeddings).
+   * **Task A9:** Compute MMD and Proxy $\mathcal{A}$-distance domain discrepancy.
+   * **Task A10:** Benchmark Zero-shot base model floor ($Z_0$).
+3. **Begin Phase B Pipeline Engineering:** Implement `grouped_split.py`, few-shot stratification subsets, and PyTorch streaming DataLoaders in [`DATA_PIPELINE/`](DATA_PIPELINE/).
+4. **Draft Chapter 2 of Thesis:** Populate Chapter 2 with empirical figures and statistics obtained from the executed Colab comparative reports.
