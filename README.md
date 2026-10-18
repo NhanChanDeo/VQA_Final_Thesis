@@ -10,6 +10,7 @@
 > **Institution:** Posts and Telecommunications Institute of Technology ([PTIT](https://portal.ptit.edu.vn/)), Hanoi, Vietnam  
 > **Faculty:** Faculty of Information Technology  
 > **Author:** Tung Tran  
+> **Progress & Status Audit:** See [`18-27-00_2026-10-17_CrossVQA_Project_Progress_Reassessment.md`](18-27-00_2026-10-17_CrossVQA_Project_Progress_Reassessment.md)  
 > **Detailed Execution Plans:** See [`PLAN/`](PLAN/) (Available in [English](PLAN/12-08-00_2026-10-09_(EN)_CrossVQA_Lossless_Branch_Inspection_and_Thesis_Execution_Plan.md) and [Vietnamese](PLAN/11-30-00_2026-10-09_CrossVQA_Lossless_Branch_Inspection_and_Thesis_Execution_Plan.md))
 
 ---
@@ -112,6 +113,7 @@ for sample in dataset:
 ## 4. Repository Layout
 
 ```text
+├── 18-27-00_..._Reassessment.md    # Project progress audit & milestone status report
 ├── DATASETS SCHEMA NORMALIZATION/  # Normalization pipelines, lossless encoding & sharding (Steps 6–10)
 │   ├── Step10_Mirror_Lossless_To_Main_Without_Test.ipynb # Server-side mirror and test pruning
 │   ├── Step9_Normalize_CrossVQA_Parquet_lossless_branch.ipynb # Lossless streaming generator
@@ -124,7 +126,12 @@ for sample in dataset:
 │   ├── 11-30-00_..._CrossVQA_..._Plan.md      # Master execution plan (Vietnamese)
 │   ├── ThesisPremise.md            # Foundational thesis topic statement
 │   └── Papers_List.md              # Academic literature review references
-├── ANALYSIS/                       # Phase A: EDA, MMD, Proxy A-distance & UMAP [Under Development]
+├── ANALYSIS/                       # Phase A: EDA, Colab analysis notebooks, MMD & latent UMAP
+│   ├── DocVQA_Analysis.ipynb       # Executed DocVQA empirical distribution profiling
+│   ├── TextVQA_Analysis.ipynb      # Executed TextVQA empirical distribution profiling
+│   ├── CrossVQA_Comparative.ipynb  # Executed comparative domain gap analysis
+│   ├── build_colab_notebooks.py    # Automated Colab notebook compiler
+│   └── hf_dataset_analyzer.py      # Agnostic dataset profiler (JSON/Markdown)
 ├── DATA_PIPELINE/                  # Phase B: Grouped leak-free splitters, AnyRes Tiling & DataLoaders [Under Development]
 ├── TRAIN/                          # Phase C: Baselines (Z0, B1-B5) & Proposed CrossVQA LoRA Architectures [Under Development]
 ├── EVALUATION/                     # Phase D: Benchmark official val, 95% Bootstrap CI & 7-class Error Taxonomy [Under Development]
@@ -141,11 +148,12 @@ for sample in dataset:
 - [x] **Milestone 2 (Lossless Engineering):** Formulated True Lossless PNG for DocVQA and Native JPEG bit-for-bit for TextVQA.
 - [x] **Milestone 3 (Streaming Sharding & Publishing):** Exported Parquet shards with page index to Hugging Face Hub branch `lossless` (17.00 GB).
 - [x] **Milestone 4 (Benchmark Modernization):** Executed Step 10 server-side mirror to branch `main` with unlabelled test split pruning (14.99 GB).
-- [ ] **Phase A (Exploratory Data Analysis):** Quantify multimodal domain discrepancy (MMD, Proxy $\mathcal{A}$-distance) and empirical OCR coverage ceilings.
-- [ ] **Phase B (Data Pipeline Engineering):** Build grouped leak-free splitters (`image_id` / `ucsf_document_id`) and Dynamic High-Res Tiling (AnyRes).
+- [ ] **Phase A (Exploratory Data Analysis - ~70% Done):** Executed Colab distribution profiling, token density, aspect ratio, and extractive ceilings. *Pending: Latent space UMAP, MMD / Proxy $\mathcal{A}$-distance, and Zero-shot ($Z_0$) baseline.*
+- [ ] **Phase B (Data Pipeline Engineering):** Build grouped leak-free splitters (`image_id` / `ucsf_document_id`), few-shot stratification subsets, and Dynamic High-Res Tiling (AnyRes).
 - [ ] **Phase C (Cross-Domain Training):** Implement Baselines (Z0, B1–B5) and proposed CrossVQA architecture (Domain-Specific LoRA + Feature Alignment Loss).
 - [ ] **Phase D (Evaluation & Analysis):** Benchmark on frozen official validation splits, compute 95% bootstrap confidence intervals, and formalize 7-class failure taxonomy.
-- [ ] **Phase E (Deployment & Thesis Manuscript):** Package interactive Gradio web demo on Hugging Face Spaces and finalize thesis dissertation chapters.
+- [ ] **Phase E (Deployment & Production Vectors):** Package interactive Gradio web demo on Hugging Face Spaces and containerized 4-bit FastAPI inference service.
+- [ ] **Phase F (Thesis Manuscript & Defense):** Complete 5-chapter graduation dissertation, automated LaTeX table export, and oral defense presentation.
 
 ---
 
