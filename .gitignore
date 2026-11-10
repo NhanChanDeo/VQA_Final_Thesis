@@ -4,3 +4,9 @@
 !.gitkeep
 .env
 .env.*
+/OFFLIMIT/
+DATA_PIPELINE/data/
+DATA_PIPELINE/cache/
+__pycache__/
+*.pyc
+
