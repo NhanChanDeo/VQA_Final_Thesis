@@ -3,7 +3,7 @@
 > **Thư mục lưu trữ:** [`PLAN/Papers`](Papers)  
 > **Đề tài:** CrossVQA: Nghiên cứu chuyển giao tri thức liên miền từ ảnh tài liệu sang ảnh cảnh tự nhiên cho mô hình Thị giác–Ngôn ngữ  
 > **Bộ dữ liệu chính (Canonical):** [`gamusa/textvqa-canonical`](https://huggingface.co/datasets/gamusa/textvqa-canonical) & [`gamusa/docvqa-canonical`](https://huggingface.co/datasets/gamusa/docvqa-canonical) *(Kế thừa từ nguyên bản TextVQA v0.5.1 & SP-DocVQA Task 1)*  
-> **Thời điểm cập nhật:** 10/10/2026  
+> **Thời điểm cập nhật:** 15/11/2026  
 
 ---
 
@@ -344,5 +344,171 @@
   year      = {2018}
 }
 ```
+
+---
+
+## 7. Bổ Sung: Bài Báo Về Kiến Trúc Mô Hình Nền Tảng VLM & Tinh Chỉnh Lượng Tử Hóa (VLM Backbones & PEFT/Quantization)
+
+> **Thư mục lưu trữ con:** [`PLAN/Papers/Model Info`](Papers/Model%20Info)  
+> **Thời điểm cập nhật:** 15/11/2026  
+> **Tham chiếu chéo các mô hình nền tảng đã có sẵn trong [`PLAN/Papers`](Papers):** STT **5** ([`Kim_2022_Donut.pdf`](Papers/Kim_2022_Donut.pdf)), STT **6** ([`Beyer_2024_PaliGemma.pdf`](Papers/Beyer_2024_PaliGemma.pdf)), STT **8** ([`Lee_2023_Pix2Struct.pdf`](Papers/Lee_2023_Pix2Struct.pdf)).
+
+| STT | Tên Tệp PDF | Tiêu Đề Bài Báo | Tác Giả & Năm | Nguồn / Hội Nghị | arXiv ID | Vai Trò trong Luận Văn |
+| :---: | :--- | :--- | :--- | :---: | :---: | :--- |
+| **22** | [`Wang_2024_Qwen2_VL.pdf`](Papers/Model%20Info/Wang_2024_Qwen2_VL.pdf) | Qwen2-VL: Enhancing Vision-Language Model's Perception of the World at Any Resolution | Peng Wang et al. (2024) | arXiv 2024 | [`2409.12191`](https://arxiv.org/abs/2409.12191) | **Primary Backbone**: Kiến trúc Naive Dynamic Resolution (`Qwen2-VL-2B`) & M-RoPE xử lý chênh lệch độ phân giải $4.8\times$ giữa DocVQA và TextVQA |
+| **23** | [`Dehghani_2023_NaViT.pdf`](Papers/Model%20Info/Dehghani_2023_NaViT.pdf) | Patch n' Pack: NaViT, a Vision Transformer for any Aspect Ratio and Resolution | Mostafa Dehghani et al. (2023) | NeurIPS 2023 | [`2307.06304`](https://arxiv.org/abs/2307.06304) | **Dynamic Vision Foundation**: Cơ chế bảo toàn tỷ lệ khung hình & nén sequence patch nền tảng cho Vision Encoder của Qwen2-VL |
+| **24** | [`Marafioti_2025_SmolVLM.pdf`](Papers/Model%20Info/Marafioti_2025_SmolVLM.pdf) | SmolVLM: Redefining small and efficient multimodal models | Andrés Marafioti et al. (2025) | arXiv 2025 | [`2504.05299`](https://arxiv.org/abs/2504.05299) | **Fast Pilot Backbone**: Mô hình VLM nhỏ gọn (`500M` / `2.2B`) tối ưu Pixel Shuffle & bộ nhớ GPU cho thử nghiệm đa seed trên Colab T4 |
+| **25** | [`Laurencon_2024_Idefics3.pdf`](Papers/Model%20Info/Laurencon_2024_Idefics3.pdf) | Building and better understanding vision-language models: insights and future directions | Hugo Laurençon et al. (2024) | arXiv 2024 | [`2408.12637`](https://arxiv.org/abs/2408.12637) | **Idefics3 / Image-Splitting Design**: Kiến trúc chia ô ảnh và kết nối đa phương thức nền tảng cho dòng SmolVLM |
+| **26** | [`Steiner_2024_PaliGemma2.pdf`](Papers/Model%20Info/Steiner_2024_PaliGemma2.pdf) | PaliGemma 2: A Family of Versatile VLMs for Transfer | Andreas Steiner et al. (2024) | arXiv 2024 | [`2412.03555`](https://arxiv.org/abs/2412.03555) | **Transfer Scaling Reference**: Phân tích tác động của độ phân giải (224/448/896px), kích thước mô hình & tốc độ học khi transfer trên DocVQA/OCR |
+| **27** | [`Zhai_2023_SigLIP.pdf`](Papers/Model%20Info/Zhai_2023_SigLIP.pdf) | Sigmoid Loss for Language Image Pre-Training | Xiaohua Zhai et al. (2023) | ICCV 2023 | [`2303.15343`](https://arxiv.org/abs/2303.15343) | **Vision Encoder Foundation**: Bộ mã hóa ảnh SigLIP dùng chung trong PaliGemma / PaliGemma 2 và SmolVLM |
+| **28** | [`Hu_2022_LoRA.pdf`](Papers/Model%20Info/Hu_2022_LoRA.pdf) | LoRA: Low-Rank Adaptation of Large Language Models | Edward J. Hu et al. (2022) | ICLR 2022 | [`2106.09685`](https://arxiv.org/abs/2106.09685) | **PEFT & Dual-Adapter Basis**: Nền tảng lý thuyết thích ứng hạng thấp cho cấu trúc Adapter tách miền ($\mathcal{A}_{\text{doc}}, \mathcal{A}_{\text{scene}}$) |
+| **29** | [`Dettmers_2023_QLoRA.pdf`](Papers/Model%20Info/Dettmers_2023_QLoRA.pdf) | QLoRA: Efficient Finetuning of Quantized LLMs | Tim Dettmers et al. (2023) | NeurIPS 2023 | [`2305.14314`](https://arxiv.org/abs/2305.14314) | **Memory-Saving Optimization**: Lượng tử hóa 4-bit NF4, Double Quantization & Paged Optimizers giúp huấn luyện `Qwen2-VL-2B` trên GPU 16GB |
+
+### Chi Tiết Từng Bài Báo & Ý Nghĩa Trích Dẫn
+
+#### 22. Qwen2-VL: Enhancing Vision-Language Model's Perception of the World at Any Resolution
+* **Tệp:** [`Wang_2024_Qwen2_VL.pdf`](Papers/Model%20Info/Wang_2024_Qwen2_VL.pdf)
+* **Tác giả:** Peng Wang, Shuai Bai, Sinan Tan, Shijie Wang et al. (Alibaba Qwen Team)
+* **arXiv / DOI:** [arXiv:2409.12191](https://arxiv.org/abs/2409.12191)
+* **Nội dung chính:**
+  - Đề xuất kiến trúc **Naive Dynamic Resolution** tự động ánh xạ ảnh có độ phân giải và tỷ lệ khung hình bất kỳ thành số lượng token thị giác tương ứng ($2\times 2$ spatial merge với stride hiệu dụng $28\text{ px}$).
+  - Đề xuất **Multimodal Rotary Position Embedding (M-RoPE)** phân rã mã hóa vị trí thành 3 thành phần (thời gian, chiều cao, chiều rộng), bảo toàn cấu trúc không gian 2D của tài liệu.
+* **Vị trí trích dẫn:** Chương 2 (Kiến trúc VLM phân giải động), Chương 3 (Lựa chọn backbone `Qwen/Qwen2-VL-2B` cho CrossVQA), Chương 4 (Cấu hình `min_pixels`/`max_pixels` và thực nghiệm chính).
+
+---
+
+#### 23. Patch n' Pack: NaViT, a Vision Transformer for any Aspect Ratio and Resolution
+* **Tệp:** [`Dehghani_2023_NaViT.pdf`](Papers/Model%20Info/Dehghani_2023_NaViT.pdf)
+* **Tác giả:** Mostafa Dehghani, Basil Mustafa, Josip Djolonga, Jonathan Heek et al. (Google DeepMind)
+* **arXiv / DOI:** [arXiv:2307.06304](https://arxiv.org/abs/2307.06304) | NeurIPS 2023
+* **Nội dung chính:**
+  - Chứng minh việc đóng gói chuỗi patch từ ảnh có độ phân giải và tỷ lệ khung hình tùy ý (sequence packing) giúp tránh biến dạng hình học so với phép resize/crop vuông truyền thống.
+  - Là nền tảng lý thuyết trực tiếp cho bộ mã hóa thị giác trong Qwen2-VL và Pix2Struct.
+* **Vị trí trích dẫn:** Chương 2 (Biểu diễn thị giác không biến dạng tỷ lệ), Chương 3 (Xử lý chênh lệch hình học giữa ảnh tài liệu dọc và ảnh cảnh tự nhiên).
+
+---
+
+#### 24. SmolVLM: Redefining Small and Efficient Multimodal Models
+* **Tệp:** [`Marafioti_2025_SmolVLM.pdf`](Papers/Model%20Info/Marafioti_2025_SmolVLM.pdf)
+* **Tác giả:** Andrés Marafioti, Orr Zohar, Miquel Farré, Merve Noyan et al. (Hugging Face)
+* **arXiv / DOI:** [arXiv:2504.05299](https://arxiv.org/abs/2504.05299)
+* **Nội dung chính:**
+  - Thiết kế họ VLM nhỏ gọn (`256M`, `500M`, `2.2B`) tối ưu hóa tỷ lệ nén token thị giác (Pixel Shuffle) và chi phí bộ nhớ GPU.
+  - Phù hợp làm mô hình thử nghiệm nhanh (fast pilot) và kiểm chứng đa seed với chi phí VRAM thấp.
+* **Vị trí trích dẫn:** Chương 3 (Phân tích đánh đổi chi phí–hiệu năng của các backbone nhỏ gọn), Chương 4 (Thử nghiệm so sánh & kiểm tra độ ổn định đa seed).
+
+---
+
+#### 25. Building and Better Understanding Vision-Language Models: Insights and Future Directions
+* **Tệp:** [`Laurencon_2024_Idefics3.pdf`](Papers/Model%20Info/Laurencon_2024_Idefics3.pdf)
+* **Tác giả:** Hugo Laurençon, Andrés Marafioti, Victor Sanh, Léo Tronchon (Hugging Face)
+* **arXiv / DOI:** [arXiv:2408.12637](https://arxiv.org/abs/2408.12637)
+* **Nội dung chính:**
+  - Giới thiệu kiến trúc **Idefics3** với chiến lược chia ô ảnh độ phân giải cao (image splitting) kết hợp Pixel Shuffle để cải thiện khả năng đọc OCR và tài liệu mà không làm bùng nổ số token.
+* **Vị trí trích dẫn:** Chương 2 (Cơ chế image tiling & connector nén token thị giác), Chương 3 (Đặc tả `Idefics3ForConditionalGeneration` cho SmolVLM).
+
+---
+
+#### 26. PaliGemma 2: A Family of Versatile VLMs for Transfer
+* **Tệp:** [`Steiner_2024_PaliGemma2.pdf`](Papers/Model%20Info/Steiner_2024_PaliGemma2.pdf)
+* **Tác giả:** Andreas Steiner, André Susano Pinto, Michael Tschannen, Daniel Keysers et al. (Google DeepMind)
+* **arXiv / DOI:** [arXiv:2412.03555](https://arxiv.org/abs/2412.03555)
+* **Nội dung chính:**
+  - Khảo sát có hệ thống sự tương tác giữa kích thước mô hình (2B–27B), độ phân giải đầu vào (`224px`, `448px`, `896px`) và tốc độ học khi chuyển giao tri thức sang các tác vụ đọc chữ/tài liệu.
+* **Vị trí trích dẫn:** Chương 2 (Tổng quan Transfer Learning cho VLM), Chương 3 & Chương 4 (Luận giải ảnh hưởng của độ phân giải đầu vào tới bài toán đọc văn bản nhỏ).
+
+---
+
+#### 27. Sigmoid Loss for Language Image Pre-Training (SigLIP)
+* **Tệp:** [`Zhai_2023_SigLIP.pdf`](Papers/Model%20Info/Zhai_2023_SigLIP.pdf)
+* **Tác giả:** Xiaohua Zhai, Basil Mustafa, Alexander Kolesnikov, Lucas Beyer (Google Research)
+* **arXiv / DOI:** [arXiv:2303.15343](https://arxiv.org/abs/2303.15343) | ICCV 2023
+* **Nội dung chính:**
+  - Thay thế hàm mất mát tương phản Softmax chuẩn bằng cặp Sigmoid loss độc lập theo batch, tạo ra bộ mã hóa ảnh SigLIP được dùng rộng rãi trong PaliGemma và SmolVLM.
+* **Vị trí trích dẫn:** Chương 2 (Bộ mã hóa thị giác SigLIP và nền tảng căn chỉnh tương phản đa phương thức).
+
+---
+
+#### 28. LoRA: Low-Rank Adaptation of Large Language Models
+* **Tệp:** [`Hu_2022_LoRA.pdf`](Papers/Model%20Info/Hu_2022_LoRA.pdf)
+* **Tác giả:** Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu et al. (Microsoft)
+* **arXiv / DOI:** [arXiv:2106.09685](https://arxiv.org/abs/2106.09685) | ICLR 2022
+* **Nội dung chính:**
+  - Đóng băng trọng số gốc $W_0$ và chèn các ma trận phân rã hạng thấp $BA$ song song vào các lớp chiếu tuyến tính của Transformer, giảm mạnh số tham số cần huấn luyện.
+* **Vị trí trích dẫn:** Chương 2 (Cơ sở lý thuyết PEFT), Chương 3 (Thiết kế Dual Domain LoRA Adapters $\mathcal{A}_{\text{doc}}, \mathcal{A}_{\text{scene}}$ chống quên tri thức).
+
+---
+
+#### 29. QLoRA: Efficient Finetuning of Quantized LLMs
+* **Tệp:** [`Dettmers_2023_QLoRA.pdf`](Papers/Model%20Info/Dettmers_2023_QLoRA.pdf)
+* **Tác giả:** Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, Luke Zettlemoyer (University of Washington)
+* **arXiv / DOI:** [arXiv:2305.14314](https://arxiv.org/abs/2305.14314) | NeurIPS 2023
+* **Nội dung chính:**
+  - Đề xuất kiểu dữ liệu **4-bit NormalFloat (NF4)**, **Double Quantization** và **Paged Optimizers**, cho phép truyền ngược gradient qua trọng số lượng tử hóa 4-bit vào adapter 16-bit mà không suy giảm độ chính xác.
+* **Vị trí trích dẫn:** Chương 3 & Chương 4 (Chiến lược tối ưu bộ nhớ VRAM: NF4 chọn lọc `llm_int8_skip_modules=["visual", "merger"]` và `paged_adamw_8bit`).
+
+---
+
+### Danh Mục BibTeX Trích Dẫn Bổ Sung (VLM Backbones & PEFT/Quantization)
+
+```bibtex
+@article{wang2024qwen2vl,
+  title   = {Qwen2-VL: Enhancing Vision-Language Model's Perception of the World at Any Resolution},
+  author  = {Wang, Peng and Bai, Shuai and Tan, Sinan and Wang, Shijie and Fan, Zhihao and Bai, Jinze and Chen, Keqin and Liu, Xuejing and Wang, Jialin and Ge, Wenbin and others},
+  journal = {arXiv preprint arXiv:2409.12191},
+  year    = {2024}
+}
+
+@inproceedings{dehghani2023patch,
+  title     = {Patch n' Pack: NaViT, a Vision Transformer for any Aspect Ratio and Resolution},
+  author    = {Dehghani, Mostafa and Mustafa, Basil and Djolonga, Josip and Heek, Jonathan and Minderer, Matthias and Caron, Mathilde and Steiner, Andreas and Puigcerver, Joan and Geirhos, Robert and Alabdulmohsin, Ibrahim and others},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2023}
+}
+
+@article{marafioti2025smolvlm,
+  title   = {SmolVLM: Redefining small and efficient multimodal models},
+  author  = {Marafioti, Andr{\'e}s and Zohar, Orr and Farr{\'e}, Miquel and Noyan, Merve and Bakouch, Elie and Cuenca, Pedro and Zakka, Cyril and Ben Allal, Loubna and Lozhkov, Anton and Tazi, Nouamane and others},
+  journal = {arXiv preprint arXiv:2504.05299},
+  year    = {2025}
+}
+
+@article{laurencon2024building,
+  title   = {Building and better understanding vision-language models: insights and future directions},
+  author  = {Lauren{\c{c}}on, Hugo and Marafioti, Andr{\'e}s and Sanh, Victor and Tronchon, L{\'e}o},
+  journal = {arXiv preprint arXiv:2408.12637},
+  year    = {2024}
+}
+
+@article{steiner2024paligemma2,
+  title   = {PaliGemma 2: A Family of Versatile VLMs for Transfer},
+  author  = {Steiner, Andreas and Pinto, Andr{\'e} Susano and Tschannen, Michael and Keysers, Daniel and Wang, Xiao and Bitton, Yonatan and Gritsenko, Alexey and Minderer, Matthias and Sherbondy, Anthony and Shang, Shangbang and others},
+  journal = {arXiv preprint arXiv:2412.03555},
+  year    = {2024}
+}
+
+@inproceedings{zhai2023sigmoid,
+  title     = {Sigmoid Loss for Language Image Pre-Training},
+  author    = {Zhai, Xiaohua and Mustafa, Basil and Kolesnikov, Alexander and Beyer, Lucas},
+  booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+  pages     = {11975--11986},
+  year      = {2023}
+}
+
+@inproceedings{hu2022lora,
+  title     = {LoRA: Low-Rank Adaptation of Large Language Models},
+  author    = {Hu, Edward J and Shen, Yelong and Wallis, Phillip and Allen-Zhu, Zeyuan and Li, Yuanzhi and Wang, Shean and Wang, Lu and Chen, Weizhu},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2022}
+}
+
+@inproceedings{dettmers2023qlora,
+  title     = {QLoRA: Efficient Finetuning of Quantized LLMs},
+  author    = {Dettmers, Tim and Pagnoni, Artidoro and Holtzman, Ari and Zettlemoyer, Luke},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2023}
+}
+```
+
 
 
