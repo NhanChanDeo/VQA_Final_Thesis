@@ -1,11 +1,17 @@
 """
-Evaluation metrics implementation for CrossVQA:
+Evaluation metrics implementation and run-card serialization for CrossVQA:
 - ANLS (Average Normalized Levenshtein Similarity) for DocVQA
 - VQA Accuracy (10-annotator soft consensus) for TextVQA
+- Transfer Gain (TG) and Forgetting Rate (FR)
+- JSONL prediction logger and standardized Run Card exporter
 """
 
+import json
 import re
-from typing import List, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+import yaml
+
 
 def _normalize_answer(s: str) -> str:
     """Standard lowercase and whitespace strip."""
@@ -78,15 +84,13 @@ def compute_vqa_accuracy(prediction: str, ground_truths: List[str]) -> float:
     return min(match_count / 3.0, 1.0)
 
 
-def evaluate_predictions(predictions: List[str], targets: List[List[str]], metric_type: str = "both"):
-    """
-    Evaluates a batch or dataset of predictions against ground-truth answer lists.
-    """
+def evaluate_predictions(predictions: List[str], targets: List[List[str]], metric_type: str = "both") -> Dict[str, float]:
+    """Evaluates a batch or dataset of predictions against ground-truth answer lists."""
     n = len(predictions)
     if n == 0:
         return {}
 
-    results = {}
+    results: Dict[str, float] = {}
     if metric_type in ["anls", "both"]:
         anls_scores = [compute_anls(p, g) for p, g in zip(predictions, targets)]
         results["anls"] = sum(anls_scores) / n
@@ -96,3 +100,54 @@ def evaluate_predictions(predictions: List[str], targets: List[List[str]], metri
         results["vqa_accuracy"] = sum(vqa_scores) / n
 
     return results
+
+
+def compute_transfer_gain(score_model: float, score_b1: float) -> float:
+    """Transfer Gain: TG = Score_Proposed - Score_TargetOnly."""
+    return float(score_model) - float(score_b1)
+
+
+def compute_forgetting_rate(anls_b2: float, anls_model: float) -> float:
+    """Forgetting Rate: FR = ANLS_SourceOnly(Doc) - ANLS_Model(Doc)."""
+    return float(anls_b2) - float(anls_model)
+
+
+def save_predictions_jsonl(records: List[Dict[str, Any]], output_path: str) -> None:
+    """Writes per-sample predictions enriched with per-sample ANLS and VQA Accuracy."""
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for rec in records:
+            pred = rec.get("prediction", "")
+            answers = rec.get("answers", [])
+            enriched = dict(rec)
+            enriched["anls"] = compute_anls(pred, answers)
+            enriched["vqa_accuracy"] = compute_vqa_accuracy(pred, answers)
+            f.write(json.dumps(enriched, ensure_ascii=False) + "\n")
+
+
+def save_run_card(
+    output_dir: str,
+    config: Dict[str, Any],
+    metrics: Dict[str, Any],
+    extra_meta: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """Writes standardized val_metrics.json and run_card.yaml into output_dir."""
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    (out / "val_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+
+    run_card = {
+        "experiment": config.get("experiment", {}),
+        "data": config.get("data", {}),
+        "model": config.get("model", {}),
+        "training": config.get("training", {}),
+        "evaluation_results": metrics,
+        "meta": extra_meta or {},
+    }
+    (out / "run_card.yaml").write_text(
+        yaml.safe_dump(run_card, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return out / "run_card.yaml"

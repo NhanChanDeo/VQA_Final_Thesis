@@ -1,0 +1,51 @@
+# Locked CrossVQA Backbone Priority & Colab Hardware Profiles
+# Order locked:
+#   1. Primary: Qwen/Qwen2-VL-2B
+#   2. Secondary 1 (Cross-Architecture 2B): HuggingFaceTB/SmolVLM-Base
+#   3. Secondary 2 (Fast Pilot / Scale Ablation): HuggingFaceTB/SmolVLM-500M-Base
+
+backbones:
+  qwen2_vl_2b:
+    repo_id: "Qwen/Qwen2-VL-2B"
+    model_type: "qwen2_vl"
+    priority: "primary"
+    skip_quant_modules: ["visual", "merger"]
+    target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    supports_dynamic_pixels: true
+
+  smolvlm_base:
+    repo_id: "HuggingFaceTB/SmolVLM-Base"
+    model_type: "smolvlm"
+    priority: "secondary_1"
+    skip_quant_modules: ["vision_model", "connector"]
+    target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    supports_dynamic_pixels: false
+
+  smolvlm_500m:
+    repo_id: "HuggingFaceTB/SmolVLM-500M-Base"
+    model_type: "smolvlm"
+    priority: "secondary_2_pilot"
+    skip_quant_modules: ["vision_model", "connector"]
+    target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    supports_dynamic_pixels: false
+
+hardware_profiles:
+  preferred_order: ["l4_24gb", "t4_16gb"]
+  l4_24gb:
+    dtype: "bf16"
+    attn_implementation: "auto"
+    per_device_train_batch_size: 4
+    gradient_accumulation_steps: 4
+    eval_batch_size: 8
+    min_pixels: 200704
+    max_pixels: 1310720
+    optim: "paged_adamw_8bit"
+  t4_16gb:
+    dtype: "fp16"
+    attn_implementation: "sdpa"
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 8
+    eval_batch_size: 4
+    min_pixels: 200704
+    max_pixels: 1048576
+    optim: "paged_adamw_8bit"

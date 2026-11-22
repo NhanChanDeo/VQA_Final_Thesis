@@ -1,0 +1,63 @@
+# Baselines Z0 & B1–B5 Configuration (ALT_THREE_SPLITS Regime)
+regime: "alt_three_splits"
+hf_dataset_revision: "three-splits"
+manifest_path: "DATA_PIPELINE/ALT_THREE_SPLITS/splits/crossvqa_split_manifest_pooled.parquet"
+runs_root: "TRAIN/ALT_THREE_SPLITS/runs"
+
+checkpoints:
+  hf_repo_id: "gamusa/crossvqa-checkpoints"
+  hf_private: true
+  gdrive_backup_root: "/content/drive/MyDrive/CrossVQA_Checkpoints/ALT_THREE_SPLITS"
+
+track_default:
+  name: "track_a_ocr_free"
+  include_ocr: false
+
+ocr_ablation_track_b:
+  name: "track_b_given_ocr"
+  include_ocr: true
+  max_ocr_tokens: 50
+  targets: ["B1", "M2"]
+
+training:
+  load_in_4bit: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  epochs: 2
+  max_grad_norm: 1.0
+  max_new_tokens: 32
+  use_soft_weights: false
+  seeds: [42, 123, 999]
+
+experiments:
+  Z0:
+    description: "Frozen zero-shot anchor + Phase A8/A9 (UMAP, MMD, Proxy A-distance)"
+    eval_splits: ["validation", "test"]
+    domain_gap_sample_size: 2000
+  B1:
+    description: "Target-only (TextVQA train)"
+    train_domains: ["textvqa"]
+    monitor_metric: "textvqa_vqa_accuracy"
+  B2:
+    description: "Source-only (DocVQA train)"
+    train_domains: ["docvqa"]
+    monitor_metric: "docvqa_anls"
+  B3:
+    description: "Joint training (DocVQA + TextVQA interleaved)"
+    train_domains: ["docvqa", "textvqa"]
+    doc_prob: 0.5
+    monitor_metric: "harmonic_mean"
+  B4:
+    description: "Sequential DocVQA -> TextVQA (catastrophic forgetting baseline)"
+    stage1_exp: "B2_source_only"
+    train_domains: ["textvqa"]
+    monitor_metric: "textvqa_vqa_accuracy"
+  B5:
+    description: "Reverse sequential TextVQA -> DocVQA (directional asymmetry)"
+    stage1_exp: "B1_target_only"
+    train_domains: ["docvqa"]
+    monitor_metric: "docvqa_anls"

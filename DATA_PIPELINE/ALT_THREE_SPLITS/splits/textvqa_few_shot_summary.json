@@ -1,0 +1,35 @@
+{
+  "source_manifest": "DATA_PIPELINE/ALT_THREE_SPLITS/splits/crossvqa_split_manifest_pooled.parquet",
+  "output_manifest": "DATA_PIPELINE/ALT_THREE_SPLITS/splits/textvqa_few_shot_manifest.parquet",
+  "sha256": "de44f9ee00834989a3d32101261a40344cbffdf38a55cfabb63cd95ac3fdb5c4",
+  "seed": 42,
+  "total_queries": 32762,
+  "total_unique_images": 20807,
+  "subsets": {
+    "1pct": {
+      "queries": 328,
+      "unique_images": 208,
+      "mean_ocr_tokens": 14.201
+    },
+    "5pct": {
+      "queries": 1637,
+      "unique_images": 1040,
+      "mean_ocr_tokens": 12.727
+    },
+    "10pct": {
+      "queries": 3277,
+      "unique_images": 2081,
+      "mean_ocr_tokens": 13.127
+    },
+    "25pct": {
+      "queries": 8191,
+      "unique_images": 5202,
+      "mean_ocr_tokens": 13.041
+    },
+    "100pct": {
+      "queries": 32762,
+      "unique_images": 20807,
+      "mean_ocr_tokens": 12.855
+    }
+  }
+}

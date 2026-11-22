@@ -1,0 +1,15 @@
+# Few-Shot Target Stratification Matrix (Hypothesis H4)
+regime: "alt_three_splits"
+manifest_path: "DATA_PIPELINE/ALT_THREE_SPLITS/splits/crossvqa_split_manifest_pooled.parquet"
+few_shot_manifest_path: "DATA_PIPELINE/ALT_THREE_SPLITS/splits/textvqa_few_shot_manifest.parquet"
+summary_path: "DATA_PIPELINE/ALT_THREE_SPLITS/splits/textvqa_few_shot_summary.json"
+runs_root: "TRAIN/ALT_THREE_SPLITS/runs"
+
+fractions_pct: [1, 5, 10, 25, 100]
+experiments: ["B1", "B4", "M2"]
+primary_seed: 42
+replication_seeds: [42, 123, 999]
+stratification:
+  group_col: "image_id"
+  nested: true
+  seed: 42

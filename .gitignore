@@ -9,4 +9,10 @@ DATA_PIPELINE/data/
 DATA_PIPELINE/cache/
 __pycache__/
 *.pyc
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+TRAIN/**/checkpoints/
 

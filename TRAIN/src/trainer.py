@@ -1,14 +1,190 @@
 """
-Standardized training and evaluation loop utilities for CrossVQA experiments.
+Standardized training, checkpoint resilience, hardware profiling, and evaluation
+utilities for CrossVQA baselines (Z0, B1–B5) and proposed methods (M1–M3).
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+import json
+import math
+import shutil
+import time
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import torch
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+from transformers import get_cosine_schedule_with_warmup
+
 from .collator import CrossVQADataCollator
-from .metrics import evaluate_predictions
+from .metrics import evaluate_predictions, save_predictions_jsonl
 
 NON_MODEL_BATCH_KEYS = {"domain_ids", "sample_weights"}
+
+HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
+    "l4_24gb": {
+        "name": "l4_24gb",
+        "dtype": "bf16",
+        "attn_implementation": "auto",
+        "per_device_train_batch_size": 4,
+        "gradient_accumulation_steps": 4,
+        "eval_batch_size": 8,
+        "min_pixels": 256 * 28 * 28,
+        "max_pixels": 1280 * 1024,
+        "optim": "paged_adamw_8bit",
+    },
+    "t4_16gb": {
+        "name": "t4_16gb",
+        "dtype": "fp16",
+        "attn_implementation": "sdpa",
+        "per_device_train_batch_size": 2,
+        "gradient_accumulation_steps": 8,
+        "eval_batch_size": 4,
+        "min_pixels": 256 * 28 * 28,
+        "max_pixels": 1024 * 1024,
+        "optim": "paged_adamw_8bit",
+    },
+    "cpu": {
+        "name": "cpu",
+        "dtype": "fp32",
+        "attn_implementation": "sdpa",
+        "per_device_train_batch_size": 2,
+        "gradient_accumulation_steps": 1,
+        "eval_batch_size": 2,
+        "min_pixels": 256 * 28 * 28,
+        "max_pixels": 512 * 512,
+        "optim": "adamw",
+    },
+}
+
+
+def resolve_hardware_profile(
+    requested: str = "auto",
+    custom_profiles: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """
+    Resolves hardware training profile. Prefers L4 (24 GB, SM >= 8.0) when available
+    and falls back automatically to T4 (16 GB) or CPU.
+    """
+    merged = {k: dict(v) for k, v in HARDWARE_PROFILES.items()}
+    if custom_profiles:
+        for k, v in custom_profiles.items():
+            if k in merged:
+                merged[k].update(v)
+            else:
+                merged[k] = dict(v)
+
+    req = requested.lower()
+    if req != "auto":
+        if req not in merged:
+            raise ValueError(f"Unknown hardware profile '{requested}'. Available: {list(merged.keys())}")
+        return merged[req]
+
+    if not torch.cuda.is_available():
+        return merged["cpu"]
+
+    props = torch.cuda.get_device_properties(0)
+    vram_gb = props.total_memory / float(1024 ** 3)
+    sm_major = torch.cuda.get_device_capability(0)[0]
+    if vram_gb >= 20.0 and sm_major >= 8:
+        return merged["l4_24gb"]
+    return merged["t4_16gb"]
+
+
+class CheckpointManager:
+    """
+    Persists adapter/router checkpoints locally, mirrors to personal Google Drive
+    when mounted, and syncs to a private Hugging Face Hub repository.
+    """
+
+    def __init__(
+        self,
+        local_ckpt_dir: str,
+        hf_repo_id: Optional[str] = "gamusa/crossvqa-checkpoints",
+        hf_path_in_repo: Optional[str] = None,
+        hf_token: Optional[str] = None,
+        gdrive_backup_dir: Optional[str] = None,
+        private: bool = True,
+    ) -> None:
+        self.local_ckpt_dir = Path(local_ckpt_dir)
+        self.local_ckpt_dir.mkdir(parents=True, exist_ok=True)
+        self.hf_repo_id = hf_repo_id
+        self.hf_path_in_repo = (hf_path_in_repo or "default").strip("/")
+        self.hf_token = hf_token
+        self.gdrive_backup_dir = Path(gdrive_backup_dir) if gdrive_backup_dir else None
+        self.private = bool(private)
+
+    def save(
+        self,
+        model,
+        tag: str = "latest",
+        trainer_state: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        target_dir = self.local_ckpt_dir / tag
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        if hasattr(model, "save_pretrained"):
+            model.save_pretrained(str(target_dir))
+        else:
+            torch.save(model.state_dict(), target_dir / "model_state.pt")
+
+        if trainer_state is not None:
+            (target_dir / "trainer_state.json").write_text(
+                json.dumps(trainer_state, indent=2), encoding="utf-8"
+            )
+
+        if self.gdrive_backup_dir is not None:
+            drive_target = self.gdrive_backup_dir / tag
+            drive_target.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(target_dir, drive_target, dirs_exist_ok=True)
+
+        if self.hf_repo_id and self.hf_token:
+            from huggingface_hub import HfApi
+
+            api = HfApi(token=self.hf_token)
+            api.create_repo(repo_id=self.hf_repo_id, repo_type="model", private=self.private, exist_ok=True)
+            api.upload_folder(
+                folder_path=str(target_dir),
+                repo_id=self.hf_repo_id,
+                path_in_repo=f"{self.hf_path_in_repo}/{tag}",
+                repo_type="model",
+            )
+
+        return target_dir
+
+    def restore_checkpoint(self, tag: str = "latest") -> Optional[Path]:
+        local_candidate = self.local_ckpt_dir / tag
+        if local_candidate.exists() and any(local_candidate.iterdir()):
+            return local_candidate
+
+        if self.hf_repo_id and self.hf_token:
+            try:
+                from huggingface_hub import snapshot_download
+
+                prefix = f"{self.hf_path_in_repo}/{tag}"
+                dl_root = Path(
+                    snapshot_download(
+                        repo_id=self.hf_repo_id,
+                        repo_type="model",
+                        allow_patterns=f"{prefix}/**",
+                        token=self.hf_token,
+                    )
+                )
+                sub = dl_root / prefix
+                if sub.exists() and any(sub.iterdir()):
+                    local_candidate.mkdir(parents=True, exist_ok=True)
+                    shutil.copytree(sub, local_candidate, dirs_exist_ok=True)
+                    return local_candidate
+            except Exception as exc:
+                print(f"Notice: Could not restore '{tag}' from HF Hub ({exc}); checking Drive fallback...")
+
+        if self.gdrive_backup_dir is not None:
+            drive_candidate = self.gdrive_backup_dir / tag
+            if drive_candidate.exists() and any(drive_candidate.iterdir()):
+                local_candidate.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(drive_candidate, local_candidate, dirs_exist_ok=True)
+                return local_candidate
+
+        return None
 
 
 def _prepare_model_inputs(batch: Dict[str, Any], device: str) -> Dict[str, Any]:
@@ -19,6 +195,28 @@ def _prepare_model_inputs(batch: Dict[str, Any], device: str) -> Dict[str, Any]:
             continue
         model_inputs[key] = val.to(device) if isinstance(val, torch.Tensor) else val
     return model_inputs
+
+
+def _compute_weighted_causal_lm_loss(
+    outputs,
+    labels: Optional[torch.Tensor],
+    sample_weights: Optional[torch.Tensor],
+) -> torch.Tensor:
+    if sample_weights is None or labels is None or not hasattr(outputs, "logits"):
+        return outputs.loss
+    logits = outputs.logits
+    shift_logits = logits[:, :-1, :].contiguous()
+    shift_labels = labels[:, 1:].contiguous()
+    per_tok = F.cross_entropy(
+        shift_logits.view(-1, shift_logits.size(-1)),
+        shift_labels.view(-1),
+        ignore_index=-100,
+        reduction="none",
+    ).view(shift_labels.shape)
+    valid_mask = (shift_labels != -100).float()
+    per_sample = (per_tok * valid_mask).sum(dim=1) / valid_mask.sum(dim=1).clamp(min=1.0)
+    weights = sample_weights.to(device=per_sample.device, dtype=per_sample.dtype)
+    return (per_sample * weights).mean()
 
 
 def train_epoch(
@@ -75,7 +273,6 @@ def train_epoch(
             pbar.set_postfix({"loss": f"{step_loss:.4f}"})
             accumulated_loss = 0.0
 
-    # Flush trailing gradients for IterableDataset streams with unknown length
     if accumulated_loss > 0.0:
         if max_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -173,3 +370,247 @@ def run_evaluation(
     if return_details:
         return metrics, details
     return metrics, predictions
+
+
+class CrossVQATrainer:
+    """
+    End-to-end trainer orchestrating Z0/B1–B5 and M1–M3 optimization,
+    composite alignment + router losses, curriculum scheduling, JSONL logging,
+    validation checkpoint selection, and HF Hub + Google Drive checkpoint sync.
+    """
+
+    def __init__(
+        self,
+        model,
+        processor,
+        run_dir: str,
+        model_type: str = "qwen2_vl",
+        device: Optional[str] = None,
+        lr: float = 2e-4,
+        weight_decay: float = 0.01,
+        warmup_ratio: float = 0.05,
+        gradient_accumulation_steps: int = 4,
+        max_grad_norm: float = 1.0,
+        optim_name: str = "paged_adamw_8bit",
+        include_ocr: bool = False,
+        use_soft_weights: bool = False,
+        align_loss_fn=None,
+        lambda_align: float = 0.0,
+        lambda_gate: float = 0.0,
+        curriculum_transform=None,
+        checkpoint_manager: Optional[CheckpointManager] = None,
+    ) -> None:
+        self.model = model
+        self.processor = processor
+        self.run_dir = Path(run_dir)
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.model_type = model_type
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.lr = float(lr)
+        self.weight_decay = float(weight_decay)
+        self.warmup_ratio = float(warmup_ratio)
+        self.gradient_accumulation_steps = int(max(gradient_accumulation_steps, 1))
+        self.max_grad_norm = float(max_grad_norm)
+        self.optim_name = optim_name
+        self.include_ocr = include_ocr
+        self.use_soft_weights = use_soft_weights
+        self.align_loss_fn = align_loss_fn
+        self.lambda_align = float(lambda_align)
+        self.lambda_gate = float(lambda_gate)
+        self.curriculum_transform = curriculum_transform
+        self.checkpoint_manager = checkpoint_manager
+        self.log_path = self.run_dir / "train_log.jsonl"
+
+    def _build_optimizer(self):
+        params = [p for p in self.model.parameters() if p.requires_grad]
+        if self.optim_name == "paged_adamw_8bit" and torch.cuda.is_available():
+            try:
+                import bitsandbytes as bnb
+
+                return bnb.optim.PagedAdamW8bit(params, lr=self.lr, weight_decay=self.weight_decay)
+            except Exception:
+                pass
+        return torch.optim.AdamW(params, lr=self.lr, weight_decay=self.weight_decay)
+
+    def _append_log(self, entry: Dict[str, Any]) -> None:
+        with self.log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def fit(
+        self,
+        train_dataset,
+        epochs: int = 2,
+        batch_size: int = 4,
+        max_steps_per_epoch: Optional[int] = None,
+        eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
+        monitor_metric: str = "selection_score",
+        forced_domain_id: Optional[int] = None,
+        curriculum_start: float = 0.2,
+        curriculum_end: float = 1.0,
+        save_every_steps: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        collator = CrossVQADataCollator(
+            self.processor,
+            model_type=self.model_type,
+            include_ocr=self.include_ocr,
+            is_train=True,
+            use_soft_weights=self.use_soft_weights,
+            image_transform=self.curriculum_transform,
+        )
+        dataloader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=collator)
+
+        try:
+            batches_per_epoch = len(dataloader)
+        except TypeError:
+            batches_per_epoch = max_steps_per_epoch or 1000
+        if max_steps_per_epoch is not None:
+            batches_per_epoch = min(batches_per_epoch, max_steps_per_epoch)
+
+        total_opt_steps = max(
+            1, math.ceil((batches_per_epoch * epochs) / self.gradient_accumulation_steps)
+        )
+        warmup_steps = int(total_opt_steps * self.warmup_ratio)
+
+        optimizer = self._build_optimizer()
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_opt_steps
+        )
+
+        best_score = -1.0
+        best_metrics: Dict[str, float] = {}
+        global_opt_step = 0
+        total_micro_steps = max(1, batches_per_epoch * epochs)
+        micro_step_idx = 0
+
+        start_time = time.time()
+        for epoch in range(1, epochs + 1):
+            self.model.train()
+            optimizer.zero_grad()
+            acc_total, acc_gen, acc_align, acc_gate, acc_router_acc = 0.0, 0.0, 0.0, 0.0, 0.0
+            micro_in_window = 0
+            epoch_steps = 0
+
+            pbar = tqdm(
+                dataloader,
+                desc=f"Epoch {epoch}/{epochs}",
+                total=max_steps_per_epoch,
+            )
+            for step, batch in enumerate(pbar):
+                if max_steps_per_epoch is not None and epoch_steps >= max_steps_per_epoch:
+                    break
+
+                if self.curriculum_transform is not None:
+                    sev = self.curriculum_transform.linear_schedule(
+                        micro_step_idx, total_micro_steps, start=curriculum_start, end=curriculum_end
+                    )
+                    self.curriculum_transform.set_severity(sev)
+
+                domain_ids = batch.get("domain_ids")
+                sample_weights = batch.get("sample_weights")
+                model_inputs = _prepare_model_inputs(batch, self.device)
+
+                if forced_domain_id is not None and domain_ids is not None:
+                    forced_tensor = torch.full_like(domain_ids, int(forced_domain_id))
+                    outputs = self.model(**model_inputs, forced_domain_ids=forced_tensor)
+                else:
+                    outputs = self.model(**model_inputs)
+
+                loss_gen = _compute_weighted_causal_lm_loss(
+                    outputs, model_inputs.get("labels"), sample_weights
+                )
+                loss_align = loss_gen.new_tensor(0.0)
+                loss_gate = loss_gen.new_tensor(0.0)
+                router_acc = 0.0
+
+                routing = getattr(self.model, "last_routing_outputs", None)
+                if routing and domain_ids is not None:
+                    d_ids = domain_ids.to(device=loss_gen.device, dtype=torch.long)
+                    gate_logits = routing.get("gate_logits")
+                    pooled_vis = routing.get("pooled_vis")
+                    if gate_logits is not None and self.lambda_gate > 0.0:
+                        loss_gate = F.cross_entropy(gate_logits.float(), d_ids)
+                        router_acc = float((gate_logits.argmax(dim=-1) == d_ids).float().mean().item())
+                    if self.align_loss_fn is not None and pooled_vis is not None and self.lambda_align > 0.0:
+                        loss_align = self.align_loss_fn(pooled_vis, d_ids)
+
+                loss_total = loss_gen + self.lambda_align * loss_align + self.lambda_gate * loss_gate
+                (loss_total / self.gradient_accumulation_steps).backward()
+
+                acc_total += float(loss_total.item())
+                acc_gen += float(loss_gen.item())
+                acc_align += float(loss_align.item())
+                acc_gate += float(loss_gate.item())
+                acc_router_acc += router_acc
+                micro_in_window += 1
+                epoch_steps += 1
+                micro_step_idx += 1
+
+                hit_boundary = (step + 1) % self.gradient_accumulation_steps == 0
+                hit_end = max_steps_per_epoch is not None and epoch_steps >= max_steps_per_epoch
+                if hit_boundary or hit_end:
+                    if self.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad()
+                    global_opt_step += 1
+
+                    gpu_mem_gb = (
+                        torch.cuda.max_memory_allocated() / float(1024 ** 3)
+                        if torch.cuda.is_available()
+                        else 0.0
+                    )
+                    log_entry = {
+                        "epoch": epoch,
+                        "opt_step": global_opt_step,
+                        "loss_total": acc_total / micro_in_window,
+                        "loss_gen": acc_gen / micro_in_window,
+                        "loss_align": acc_align / micro_in_window,
+                        "loss_gate": acc_gate / micro_in_window,
+                        "router_acc": acc_router_acc / micro_in_window,
+                        "lr": float(scheduler.get_last_lr()[0]),
+                        "gpu_mem_gb": round(gpu_mem_gb, 3),
+                    }
+                    self._append_log(log_entry)
+                    pbar.set_postfix({"loss": f"{log_entry['loss_total']:.4f}"})
+                    acc_total = acc_gen = acc_align = acc_gate = acc_router_acc = 0.0
+                    micro_in_window = 0
+
+                    if (
+                        self.checkpoint_manager is not None
+                        and save_every_steps is not None
+                        and global_opt_step % save_every_steps == 0
+                    ):
+                        self.checkpoint_manager.save(
+                            self.model,
+                            tag="latest",
+                            trainer_state={"epoch": epoch, "opt_step": global_opt_step},
+                        )
+
+            # Flush remainder at end of epoch
+            if micro_in_window > 0:
+                if self.max_grad_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+                global_opt_step += 1
+
+            # Per-epoch validation & checkpointing
+            val_metrics = eval_fn() if eval_fn is not None else {}
+            if self.checkpoint_manager is not None:
+                state = {"epoch": epoch, "opt_step": global_opt_step, "val_metrics": val_metrics}
+                self.checkpoint_manager.save(self.model, tag="latest", trainer_state=state)
+                score = float(val_metrics.get(monitor_metric, 0.0))
+                if not val_metrics or score >= best_score:
+                    best_score = score
+                    best_metrics = dict(val_metrics)
+                    self.checkpoint_manager.save(self.model, tag="best", trainer_state=state)
+
+        elapsed_sec = round(time.time() - start_time, 2)
+        return {
+            "epochs": epochs,
+            "opt_steps": global_opt_step,
+            "elapsed_sec": elapsed_sec,
+            "best_metrics": best_metrics,
+        }

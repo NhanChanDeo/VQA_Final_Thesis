@@ -1,0 +1,59 @@
+# Proposed CrossVQA Architectures M1–M3 Configuration (ALT_THREE_SPLITS Regime)
+regime: "alt_three_splits"
+hf_dataset_revision: "three-splits"
+manifest_path: "DATA_PIPELINE/ALT_THREE_SPLITS/splits/crossvqa_split_manifest_pooled.parquet"
+runs_root: "TRAIN/ALT_THREE_SPLITS/runs"
+
+checkpoints:
+  hf_repo_id: "gamusa/crossvqa-checkpoints"
+  hf_private: true
+  gdrive_backup_root: "/content/drive/MyDrive/CrossVQA_Checkpoints/ALT_THREE_SPLITS"
+
+training:
+  load_in_4bit: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  max_grad_norm: 1.0
+  max_new_tokens: 32
+  seeds: [42, 123, 999]
+
+methods:
+  M1:
+    description: "Dual Domain-Specific LoRA (A_doc, A_scene) + Visual Soft Gating Router"
+    router_tau: 1.0
+    lambda_gate: 0.1
+    lambda_align: 0.0
+    align_type: "none"
+    stage1_doc_epochs: 1
+    stage2_transfer_epochs: 2
+    freeze_doc_in_stage2: true
+
+  M2:
+    description: "M1 + Cross-Domain Feature Alignment (Multi-Kernel RBF MMD default; InfoNCE ablation)"
+    router_tau: 1.0
+    lambda_gate: 0.1
+    lambda_align: 0.1
+    align_type: "mmd"
+    mmd_sigmas: [0.5, 1.0, 2.0, 4.0, 8.0]
+    queue_size: 256
+    stage1_doc_epochs: 1
+    stage2_transfer_epochs: 2
+    freeze_doc_in_stage2: true
+
+  M3:
+    description: "M2 + Curriculum Pseudo-Domains (3D homography + shadow + blur)"
+    router_tau: 1.0
+    lambda_gate: 0.1
+    lambda_align: 0.1
+    align_type: "mmd"
+    queue_size: 256
+    stage1_doc_epochs: 1
+    stage2_curriculum_epochs: 1
+    curriculum_severity_start: 0.2
+    curriculum_severity_end: 1.0
+    stage3_transfer_epochs: 2
+    freeze_doc_in_stage3: true
