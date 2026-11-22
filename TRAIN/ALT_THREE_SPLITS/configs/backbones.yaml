@@ -30,9 +30,10 @@ backbones:
     supports_dynamic_pixels: false
 
 hardware_profiles:
-  preferred_order: ["l4_24gb", "t4_16gb"]
+  preferred_order: ["l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"]
   l4_24gb:
     dtype: "bf16"
+    load_in_4bit: true
     attn_implementation: "auto"
     per_device_train_batch_size: 4
     gradient_accumulation_steps: 4
@@ -40,8 +41,29 @@ hardware_profiles:
     min_pixels: 200704
     max_pixels: 1310720
     optim: "paged_adamw_8bit"
+  a100_40gb:
+    dtype: "bf16"
+    load_in_4bit: true
+    attn_implementation: "auto"
+    per_device_train_batch_size: 8
+    gradient_accumulation_steps: 2
+    eval_batch_size: 16
+    min_pixels: 200704
+    max_pixels: 1572864
+    optim: "paged_adamw_8bit"
+  g4_96gb:
+    dtype: "bf16"
+    load_in_4bit: false
+    attn_implementation: "auto"
+    per_device_train_batch_size: 16
+    gradient_accumulation_steps: 1
+    eval_batch_size: 32
+    min_pixels: 200704
+    max_pixels: 2097152
+    optim: "adamw"
   t4_16gb:
     dtype: "fp16"
+    load_in_4bit: true
     attn_implementation: "sdpa"
     per_device_train_batch_size: 2
     gradient_accumulation_steps: 8
