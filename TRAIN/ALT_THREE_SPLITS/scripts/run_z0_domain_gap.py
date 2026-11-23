@@ -63,9 +63,10 @@ def extract_domain_embeddings(
     buf = []
     count = 0
     model.eval()
+    from tqdm.auto import tqdm
 
     try:
-        for sample in ds:
+        for sample in tqdm(ds, desc=f"Extracting {dataset_name} embeddings", total=max_samples):
             if count >= max_samples:
                 break
             buf.append(sample)

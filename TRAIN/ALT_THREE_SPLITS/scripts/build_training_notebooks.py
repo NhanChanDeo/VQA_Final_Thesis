@@ -55,6 +55,24 @@ from pathlib import Path
 
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+def run_streamed(cmd):
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        env=env,
+    )
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+    ret = proc.wait()
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
 
 if not Path("TRAIN/src").exists():
     if Path("VQA_Final_Thesis/TRAIN/src").exists():
@@ -204,7 +222,7 @@ if MAX_EVAL_SAMPLES is not None:
     cmd.extend(["--max_eval_samples", str(MAX_EVAL_SAMPLES)])
 
 print("Running:", " ".join(cmd))
-subprocess.run(cmd, check=True)
+run_streamed(cmd)
 """,
     },
     {
@@ -244,7 +262,7 @@ if MAX_TRAIN_STEPS is not None:
 if MAX_EVAL_SAMPLES is not None:
     cmd.extend(["--max_eval_samples", str(MAX_EVAL_SAMPLES)])
 
-subprocess.run(cmd, check=True)
+run_streamed(cmd)
 """,
     },
     {
@@ -280,7 +298,7 @@ if MAX_TRAIN_STEPS is not None:
 if MAX_EVAL_SAMPLES is not None:
     cmd.extend(["--max_eval_samples", str(MAX_EVAL_SAMPLES)])
 
-subprocess.run(cmd, check=True)
+run_streamed(cmd)
 """,
     },
     {
@@ -317,7 +335,7 @@ if MAX_TRAIN_STEPS is not None:
 if MAX_EVAL_SAMPLES is not None:
     cmd.extend(["--max_eval_samples", str(MAX_EVAL_SAMPLES)])
 
-subprocess.run(cmd, check=True)
+run_streamed(cmd)
 """,
     },
     {
@@ -362,7 +380,7 @@ if MAX_TRAIN_STEPS is not None:
 if MAX_EVAL_SAMPLES is not None:
     cmd.extend(["--max_eval_samples", str(MAX_EVAL_SAMPLES)])
 
-subprocess.run(cmd, check=True)
+run_streamed(cmd)
 """,
     },
     {
@@ -406,7 +424,7 @@ for pct in FRACTIONS:
         if MAX_EVAL_SAMPLES is not None:
             cmd.extend(["--max_eval_samples", str(MAX_EVAL_SAMPLES)])
         print(f"\\n>>> Running {method} at {pct}% target TextVQA...")
-        subprocess.run(cmd, check=True)
+        run_streamed(cmd)
 """,
     },
 ]
