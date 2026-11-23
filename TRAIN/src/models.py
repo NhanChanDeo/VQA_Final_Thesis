@@ -101,6 +101,7 @@ def build_vlm_model_and_processor(
         "torch_dtype": compute_dtype,
         "attn_implementation": attn_impl,
         "device_map": "auto" if torch.cuda.is_available() else None,
+        "low_cpu_mem_usage": True,
     }
     if quantization_config is not None:
         load_kwargs["quantization_config"] = quantization_config
