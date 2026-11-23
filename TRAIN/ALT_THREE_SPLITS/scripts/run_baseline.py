@@ -43,7 +43,7 @@ def main() -> None:
     parser.add_argument("--exp", required=True, choices=["B1", "B2", "B3", "B4", "B5"])
     parser.add_argument("--model", default="qwen2_vl_2b", choices=["qwen2_vl_2b", "smolvlm_base", "smolvlm_500m"])
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--hardware_profile", default="auto", choices=["auto", "l4_24gb", "t4_16gb", "cpu"])
+    parser.add_argument("--hardware_profile", default="auto", choices=["auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb", "cpu"])
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--few_shot_pct", type=int, default=100, choices=[1, 5, 10, 25, 100])
     parser.add_argument("--include_ocr", action="store_true")
@@ -119,7 +119,7 @@ def main() -> None:
 
     model, processor = build_vlm_model_and_processor(
         model_name_or_key=args.model,
-        load_in_4bit=tr_cfg["load_in_4bit"],
+        load_in_4bit=bool(hw.get("load_in_4bit", tr_cfg["load_in_4bit"])),
         use_lora=True,
         lora_r=tr_cfg["lora_r"],
         lora_alpha=tr_cfg["lora_alpha"],

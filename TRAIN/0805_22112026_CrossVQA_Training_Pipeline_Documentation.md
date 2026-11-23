@@ -72,9 +72,11 @@ TRAIN/
 ### 2.2 Selective 4-Bit NF4 Quantization
 Quantizing early patch/projection weights in the vision encoder degrades legibility of small 6–8 pt characters in DocVQA scans. Therefore, `build_vlm_model_and_processor()` applies 4-bit NF4 QLoRA **only to the LLM decoder**, explicitly exempting the vision encoder and multimodal connector (`llm_int8_skip_modules=["visual", "merger"]` for Qwen2-VL; `["vision_model", "connector"]` for SmolVLM).
 
-### 2.3 Hardware Profiles (`l4_24gb` Primary, `t4_16gb` Fallback)
-`resolve_hardware_profile("auto")` inspects CUDA VRAM and compute capability (SM):
-* **Preferred (`l4_24gb`, VRAM $\ge$ 20 GB & SM $\ge$ 8.0):** Uses `bfloat16`, `flash_attention_2` (when installed, else `sdpa`), `batch_size=4`, `grad_accum=4` (effective batch `16`), `eval_batch_size=8`, and `max_pixels=1,310,720`.
+### 2.3 Hardware Profiles (`l4_24gb` Primary, `a100_40gb` Second, `g4_96gb`, `t4_16gb` Fallback)
+`resolve_hardware_profile("auto")` inspects CUDA VRAM and compute capability (SM) following `preferred_order: ["l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"]`:
+* **Primary (`l4_24gb`, VRAM $\ge$ 20 GB & SM $\ge$ 8.0):** Uses `bfloat16`, 4-bit NF4, `flash_attention_2` (when installed, else `sdpa`), `batch_size=4`, `grad_accum=4` (effective batch `16`), `eval_batch_size=8`, and `max_pixels=1,310,720`.
+* **Second (`a100_40gb`, VRAM $\ge$ 36 GB & SM $\ge$ 8.0):** Scales to `batch_size=8`, `grad_accum=2`, `eval_batch_size=16`, and `max_pixels=1,572,864` to leverage A100 HBM2e bandwidth.
+* **High-VRAM (`g4_96gb`, VRAM $\ge$ 85 GB & SM $\ge$ 10.0, Blackwell RTX PRO 6000):** Runs pure `bfloat16` LoRA (`load_in_4bit=false`, `optim="adamw"`) with `batch_size=16`, `grad_accum=1`, `eval_batch_size=32`, and `max_pixels=2,097,152`.
 * **Fallback (`t4_16gb`, 16 GB T4):** Automatically switches to `float16`, `sdpa`, `batch_size=2`, `grad_accum=8` (effective batch `16`), `eval_batch_size=4`, `max_pixels=1,048,576`, and `paged_adamw_8bit` to prevent OOM spikes.
 
 ---

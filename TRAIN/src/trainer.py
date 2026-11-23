@@ -24,6 +24,7 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
     "l4_24gb": {
         "name": "l4_24gb",
         "dtype": "bf16",
+        "load_in_4bit": True,
         "attn_implementation": "auto",
         "per_device_train_batch_size": 4,
         "gradient_accumulation_steps": 4,
@@ -32,9 +33,34 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "max_pixels": 1280 * 1024,
         "optim": "paged_adamw_8bit",
     },
+    "a100_40gb": {
+        "name": "a100_40gb",
+        "dtype": "bf16",
+        "load_in_4bit": True,
+        "attn_implementation": "auto",
+        "per_device_train_batch_size": 8,
+        "gradient_accumulation_steps": 2,
+        "eval_batch_size": 16,
+        "min_pixels": 256 * 28 * 28,
+        "max_pixels": 1536 * 1024,
+        "optim": "paged_adamw_8bit",
+    },
+    "g4_96gb": {
+        "name": "g4_96gb",
+        "dtype": "bf16",
+        "load_in_4bit": False,
+        "attn_implementation": "auto",
+        "per_device_train_batch_size": 16,
+        "gradient_accumulation_steps": 1,
+        "eval_batch_size": 32,
+        "min_pixels": 256 * 28 * 28,
+        "max_pixels": 2048 * 1024,
+        "optim": "adamw",
+    },
     "t4_16gb": {
         "name": "t4_16gb",
         "dtype": "fp16",
+        "load_in_4bit": True,
         "attn_implementation": "sdpa",
         "per_device_train_batch_size": 2,
         "gradient_accumulation_steps": 8,
@@ -46,6 +72,7 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
     "cpu": {
         "name": "cpu",
         "dtype": "fp32",
+        "load_in_4bit": False,
         "attn_implementation": "sdpa",
         "per_device_train_batch_size": 2,
         "gradient_accumulation_steps": 1,
@@ -62,12 +89,14 @@ def resolve_hardware_profile(
     custom_profiles: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
-    Resolves hardware training profile. Prefers L4 (24 GB, SM >= 8.0) when available
-    and falls back automatically to T4 (16 GB) or CPU.
+    Resolves hardware training profile by detected VRAM / compute capability:
+    L4 (24GB, primary), A100 (40/80GB, second), G4 (96GB Blackwell), T4 (16GB fallback), or CPU.
     """
     merged = {k: dict(v) for k, v in HARDWARE_PROFILES.items()}
     if custom_profiles:
         for k, v in custom_profiles.items():
+            if not isinstance(v, dict):
+                continue
             if k in merged:
                 merged[k].update(v)
             else:
@@ -85,6 +114,10 @@ def resolve_hardware_profile(
     props = torch.cuda.get_device_properties(0)
     vram_gb = props.total_memory / float(1024 ** 3)
     sm_major = torch.cuda.get_device_capability(0)[0]
+    if vram_gb >= 85.0 and sm_major >= 10:
+        return merged["g4_96gb"]
+    if vram_gb >= 36.0 and sm_major >= 8:
+        return merged["a100_40gb"]
     if vram_gb >= 20.0 and sm_major >= 8:
         return merged["l4_24gb"]
     return merged["t4_16gb"]

@@ -138,7 +138,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Run Z0 zero-shot + Phase A8/A9 domain gap diagnostics.")
     parser.add_argument("--model", default="qwen2_vl_2b", choices=["qwen2_vl_2b", "smolvlm_base", "smolvlm_500m"])
-    parser.add_argument("--hardware_profile", default="auto", choices=["auto", "l4_24gb", "t4_16gb", "cpu"])
+    parser.add_argument("--hardware_profile", default="auto", choices=["auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb", "cpu"])
     parser.add_argument("--eval_splits", nargs="+", default=["validation", "test"])
     parser.add_argument("--domain_gap_samples", type=int, default=2000)
     parser.add_argument("--max_eval_samples", type=int, default=None)
@@ -162,7 +162,7 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, processor = build_vlm_model_and_processor(
         model_name_or_key=args.model,
-        load_in_4bit=base_cfg["training"]["load_in_4bit"],
+        load_in_4bit=bool(hw.get("load_in_4bit", base_cfg["training"]["load_in_4bit"])),
         use_lora=False,
         architecture_mode="none",
         min_pixels=hw["min_pixels"],

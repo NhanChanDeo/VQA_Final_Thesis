@@ -46,7 +46,7 @@ def _code_cell(code: str) -> Dict:
 
 
 CELL_BOOTSTRAP = f"""# ==============================================================================
-# 1. COLAB SETUP, REPO SYNC & GPU CHECK (L4 PREFERRED / T4 FALLBACK)
+# 1. COLAB SETUP, REPO SYNC & GPU CHECK (L4 > A100 > G4 > T4 FALLBACK)
 # ==============================================================================
 import os
 import subprocess
@@ -82,7 +82,7 @@ if torch.cuda.is_available():
     vram_gb = props.total_memory / (1024 ** 3)
     print(f"GPU: {{props.name}} | VRAM: {{vram_gb:.1f}} GB | bf16: {{torch.cuda.is_bf16_supported()}}")
 else:
-    print("WARNING: No CUDA GPU detected. Switch Colab runtime to L4 or T4.")
+    print("WARNING: No CUDA GPU detected. Switch Colab runtime to L4, A100, G4, or T4.")
 """
 
 CELL_AUTH_AND_DRIVE = """# ==============================================================================
@@ -189,7 +189,7 @@ import subprocess
 import sys
 
 MODEL_KEY = "qwen2_vl_2b"        # Options: "qwen2_vl_2b", "smolvlm_base", "smolvlm_500m"
-HARDWARE_PROFILE = "auto"        # "auto" prefers L4 (24GB) and falls back to T4 (16GB)
+HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 DOMAIN_GAP_SAMPLES = 2000        # Number of validation samples per domain for UMAP/MMD/Proxy-A
 MAX_EVAL_SAMPLES = None          # Set e.g. 100 for a quick pilot smoke test
 
@@ -219,6 +219,7 @@ import sys
 
 EXP = "B1"                       # "B1" (TextVQA) or "B2" (DocVQA)
 MODEL_KEY = "qwen2_vl_2b"        # "qwen2_vl_2b" | "smolvlm_base" | "smolvlm_500m"
+HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42                        # Seeds: 42, 123, 999
 INCLUDE_OCR = False              # False = Track A (OCR-free primary); True = Track B ablation
 MAX_TRAIN_STEPS = None           # Set e.g. 20 for smoke test
@@ -229,7 +230,7 @@ cmd = [
     "--exp", EXP,
     "--model", MODEL_KEY,
     "--seed", str(SEED),
-    "--hardware_profile", "auto",
+    "--hardware_profile", HARDWARE_PROFILE,
     "--local_data_dir", str(LOCAL_DATA_DIR),
     "--hf_ckpt_repo", "gamusa/crossvqa-checkpoints",
     "--resume_from_hub",
@@ -257,6 +258,7 @@ import subprocess
 import sys
 
 MODEL_KEY = "qwen2_vl_2b"
+HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None
@@ -266,7 +268,7 @@ cmd = [
     "--exp", "B3",
     "--model", MODEL_KEY,
     "--seed", str(SEED),
-    "--hardware_profile", "auto",
+    "--hardware_profile", HARDWARE_PROFILE,
     "--local_data_dir", str(LOCAL_DATA_DIR),
     "--hf_ckpt_repo", "gamusa/crossvqa-checkpoints",
     "--resume_from_hub",
@@ -293,6 +295,7 @@ import sys
 
 EXP = "B4"                       # "B4" (Doc->Text) or "B5" (Text->Doc)
 MODEL_KEY = "qwen2_vl_2b"
+HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None
@@ -302,7 +305,7 @@ cmd = [
     "--exp", EXP,
     "--model", MODEL_KEY,
     "--seed", str(SEED),
-    "--hardware_profile", "auto",
+    "--hardware_profile", HARDWARE_PROFILE,
     "--local_data_dir", str(LOCAL_DATA_DIR),
     "--hf_ckpt_repo", "gamusa/crossvqa-checkpoints",
     "--resume_from_hub",
@@ -329,6 +332,7 @@ import sys
 
 EXP = "M2"                       # "M1" | "M2" | "M3"
 MODEL_KEY = "qwen2_vl_2b"        # Pilot first with "smolvlm_500m", then run "qwen2_vl_2b" & "smolvlm_base"
+HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
 ALIGN_TYPE = "mmd"               # "mmd" (default) or "infonce" (ablation)
 INCLUDE_OCR = False              # True for Track B Given-OCR ablation on M2
@@ -342,7 +346,7 @@ cmd = [
     "--model", MODEL_KEY,
     "--seed", str(SEED),
     "--align_type", ALIGN_TYPE,
-    "--hardware_profile", "auto",
+    "--hardware_profile", HARDWARE_PROFILE,
     "--local_data_dir", str(LOCAL_DATA_DIR),
     "--hf_ckpt_repo", "gamusa/crossvqa-checkpoints",
     "--resume_from_hub",
@@ -372,6 +376,7 @@ import subprocess
 import sys
 
 MODEL_KEY = "qwen2_vl_2b"
+HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
 FRACTIONS = [1, 5, 10, 25]
 METHODS = ["B1", "B4", "M2"]
@@ -387,7 +392,7 @@ for pct in FRACTIONS:
             "--model", MODEL_KEY,
             "--seed", str(SEED),
             "--few_shot_pct", str(pct),
-            "--hardware_profile", "auto",
+            "--hardware_profile", HARDWARE_PROFILE,
             "--local_data_dir", str(LOCAL_DATA_DIR),
             "--hf_ckpt_repo", "gamusa/crossvqa-checkpoints",
             "--resume_from_hub",

@@ -41,7 +41,7 @@ def main() -> None:
     parser.add_argument("--exp", required=True, choices=["M1", "M2", "M3"])
     parser.add_argument("--model", default="qwen2_vl_2b", choices=["qwen2_vl_2b", "smolvlm_base", "smolvlm_500m"])
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--hardware_profile", default="auto", choices=["auto", "l4_24gb", "t4_16gb", "cpu"])
+    parser.add_argument("--hardware_profile", default="auto", choices=["auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb", "cpu"])
     parser.add_argument("--align_type", default=None, choices=["none", "mmd", "infonce"])
     parser.add_argument("--lambda_align", type=float, default=None)
     parser.add_argument("--lambda_gate", type=float, default=None)
@@ -116,7 +116,7 @@ def main() -> None:
 
     model, processor = build_vlm_model_and_processor(
         model_name_or_key=args.model,
-        load_in_4bit=tr_cfg["load_in_4bit"],
+        load_in_4bit=bool(hw.get("load_in_4bit", tr_cfg["load_in_4bit"])),
         use_lora=True,
         lora_r=tr_cfg["lora_r"],
         lora_alpha=tr_cfg["lora_alpha"],
