@@ -238,6 +238,16 @@ def test_collator_masking_placeholders_and_eval_left_padding():
     assert proc_s.tokenizer.padding_side == "left"
     assert proc_s.last_texts[0][0].startswith("<image>\nQuestion:")
 
+    # Qwen2-VL fallback when chat_template exists but omits <|image_pad|>
+    class _BrokenTemplateProc(_DummyProcessor):
+        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
+            return "<|im_start|>user\nQuestion only without image pad<|im_end|>\n"
+
+    proc_broken = _BrokenTemplateProc(with_chat_template=True)
+    col_broken = CrossVQADataCollator(proc_broken, model_type="qwen2_vl", include_ocr=False, is_train=False)
+    _ = col_broken(batch)
+    assert "<|vision_start|><|image_pad|><|vision_end|>" in proc_broken.last_texts[0][0]
+
 
 def test_dual_lora_linear_and_wrapper_stage_freezing_and_roundtrip(tmp_path):
     torch.manual_seed(0)

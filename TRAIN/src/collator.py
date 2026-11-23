@@ -90,9 +90,11 @@ class CrossVQADataCollator:
                     }
                 ]
                 try:
-                    return self.processor.apply_chat_template(
+                    templated = self.processor.apply_chat_template(
                         messages, tokenize=False, add_generation_prompt=True
                     )
+                    if isinstance(templated, str) and "<|image_pad|>" in templated:
+                        return templated
                 except Exception:
                     pass
             return f"<|vision_start|><|image_pad|><|vision_end|>\n{prompt_text}"
