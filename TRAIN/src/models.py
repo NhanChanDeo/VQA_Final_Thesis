@@ -80,7 +80,11 @@ def build_vlm_model_and_processor(
         print("Warning: CUDA unavailable; disabling 4-bit BitsAndBytes quantization for CPU execution.")
 
     if effective_4bit:
-        skip_modules = ["visual", "merger"] if "Qwen2" in model_id else ["vision_model", "connector"]
+        skip_modules = (
+            ["lm_head", "visual", "merger"]
+            if "Qwen2" in model_id
+            else ["lm_head", "vision_model", "connector"]
+        )
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",

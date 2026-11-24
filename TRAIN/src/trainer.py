@@ -222,11 +222,14 @@ class CheckpointManager:
 
 def _prepare_model_inputs(batch: Dict[str, Any], device: str) -> Dict[str, Any]:
     """Filters out metadata keys and moves tensor inputs onto target device."""
+    non_blocking = isinstance(device, str) and device.startswith("cuda")
     model_inputs = {}
     for key, val in batch.items():
         if key in NON_MODEL_BATCH_KEYS:
             continue
-        model_inputs[key] = val.to(device) if isinstance(val, torch.Tensor) else val
+        model_inputs[key] = (
+            val.to(device, non_blocking=non_blocking) if isinstance(val, torch.Tensor) else val
+        )
     return model_inputs
 
 
@@ -490,7 +493,12 @@ class CrossVQATrainer:
             use_soft_weights=self.use_soft_weights,
             image_transform=self.curriculum_transform,
         )
-        dataloader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=collator)
+        dataloader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            collate_fn=collator,
+            pin_memory=torch.cuda.is_available(),
+        )
 
         try:
             batches_per_epoch = len(dataloader)
