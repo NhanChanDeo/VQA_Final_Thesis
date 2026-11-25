@@ -273,6 +273,7 @@ def _make_snapshot_cell(include_train: bool = True, include_test: bool = False) 
 CELL_SYNC_LOGS = """# ==============================================================================
 # 5. INSPECT RESULTS & UNATTENDED SYNC (DRIVE + OPTIONAL GITHUB)
 # ==============================================================================
+import os
 import shutil
 import subprocess
 import time
@@ -280,14 +281,30 @@ from pathlib import Path
 
 _t0 = time.perf_counter()
 
-# Preview generated metrics/run cards
-for p in sorted(Path("TRAIN/ALT_THREE_SPLITS/runs").rglob("val_metrics.json")):
-    print("===", p, "===")
-    print(p.read_text(encoding="utf-8")[:600])
+# Preview generated metrics/run cards & display UMAP plot if present
+for p in sorted(Path("TRAIN/ALT_THREE_SPLITS/runs").rglob("*.json")):
+    if p.name in ("val_metrics.json", "domain_gap_metrics.json"):
+        print("===", p, "===")
+        print(p.read_text(encoding="utf-8")[:1000])
+
+try:
+    from IPython.display import Image as IPyImage, display
+    for img_p in sorted(Path("TRAIN/ALT_THREE_SPLITS/runs").rglob("umap_domain_gap.png")):
+        print("===", img_p, "===")
+        display(IPyImage(filename=str(img_p)))
+except Exception:
+    pass
+
+# Resolve Google Drive backup dir safely (even if Cell 5 is run independently)
+_gdrive_dir = globals().get("GDRIVE_BACKUP_DIR")
+if not _gdrive_dir and Path("/content/drive/MyDrive").exists():
+    _default_drive = Path("/content/drive/MyDrive/CrossVQA_Checkpoints/ALT_THREE_SPLITS")
+    _default_drive.mkdir(parents=True, exist_ok=True)
+    _gdrive_dir = str(_default_drive)
 
 # Mirror lightweight logs/plots to Google Drive if mounted
-if GDRIVE_BACKUP_DIR:
-    drive_runs = Path(GDRIVE_BACKUP_DIR) / "runs_logs"
+if _gdrive_dir:
+    drive_runs = Path(_gdrive_dir) / "runs_logs"
     drive_runs.mkdir(parents=True, exist_ok=True)
     shutil.copytree("TRAIN/ALT_THREE_SPLITS/runs", drive_runs, dirs_exist_ok=True)
     print(f"Mirrored lightweight run logs to {drive_runs}")
@@ -312,6 +329,7 @@ if PUSH_LOGS_TO_GITHUB:
     else:
         print("No new run artifacts to commit.")
 
+STAGE_TIMINGS = globals().get("STAGE_TIMINGS", {})
 STAGE_TIMINGS["sync_sec"] = round(time.perf_counter() - _t0, 2)
 """
 
@@ -396,10 +414,11 @@ NOTEBOOK_SPECS: List[Dict] = [
         "filename": "00_Z0_ZeroShot_and_DomainGap.ipynb",
         "needs_umap": True,
         "include_train_shards": False,
-        "include_test_shards": True,
+        "include_test_shards": False,
         "title": "# 00 — Z0 Zero-Shot Benchmark & Phase A8/A9 Domain Gap Diagnostics\n\n"
-                 "Evaluates the frozen backbone (`Qwen/Qwen2-VL-2B` primary, `SmolVLM-Base`, `SmolVLM-500M-Base`) "
-                 "on `NEW_validation` + `NEW_test`, generates 2D UMAP projections (A8), and computes RKHS MMD & 5-fold Proxy $\\mathcal{A}$-distance (A9).",
+                 "Evaluates the frozen backbone (`HuggingFaceTB/SmolVLM-500M-Base` primary, `SmolVLM-Base` 2B scale control, `Qwen/Qwen2-VL-2B` cross-arch anchor) "
+                 "on `NEW_validation` (default, or `NEW_validation` + `NEW_test`), generates deduplicated 2D UMAP projections (A8), "
+                 "and computes balanced RKHS MMD & 5-fold Proxy $\\mathcal{A}$-distance (A9). Supports fast subset or domain-gap-only runs.",
         "run_code": """# ==============================================================================
 # 4. RUN Z0 ZERO-SHOT + PHASE A8 UMAP + PHASE A9 MMD / PROXY A-DISTANCE
 # ==============================================================================
@@ -407,11 +426,38 @@ import sys
 import time
 import traceback
 import torch
+from huggingface_hub import snapshot_download
 
-MODEL_KEY = "qwen2_vl_2b"        # Options: "qwen2_vl_2b", "smolvlm_base", "smolvlm_500m"
-HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
-DOMAIN_GAP_SAMPLES = 2000        # Number of validation samples per domain for UMAP/MMD/Proxy-A
-MAX_EVAL_SAMPLES = None          # Set e.g. 100 for a quick pilot smoke test
+MODEL_KEY = "smolvlm_500m"            # Primary: "smolvlm_500m" | Scale 2B: "smolvlm_base" | Cross-Arch: "qwen2_vl_2b"
+HARDWARE_PROFILE = "auto"             # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
+
+# Execution Mode:
+#   - "val_and_domain_gap" (Default): Zero-shot VQA on NEW_validation + fused Phase A8/A9 Domain Gap
+#   - "domain_gap_only"   (Fastest):  Skips VQA text generation & LLM layers; runs UMAP + MMD + Proxy-A on NEW_validation
+#   - "full_val_and_test" (Full):     Evaluates both NEW_validation and NEW_test + Domain Gap
+RUN_MODE = "val_and_domain_gap"
+
+DOMAIN_GAP_SAMPLES = 794              # Balanced unique image_ids/domain on NEW_validation (794 = max DocVQA unique pages)
+MAX_EVAL_SAMPLES = None               # None = evaluate all NEW_validation queries (3,141 DocVQA / 2,860 TextVQA)
+
+if RUN_MODE == "domain_gap_only":
+    EVAL_SPLITS = []
+elif RUN_MODE == "full_val_and_test":
+    EVAL_SPLITS = ["validation", "test"]
+else:
+    EVAL_SPLITS = ["validation"]
+
+# Ensure test shards are synced if "test" split was requested
+if "test" in EVAL_SPLITS:
+    for _ds_name, _repo_id in [("docvqa", "gamusa/docvqa-canonical"), ("textvqa", "gamusa/textvqa-canonical")]:
+        _tdir = LOCAL_DATA_DIR / _ds_name
+        if not any((_tdir / "data").glob("test-*.parquet")):
+            print(f"Syncing test shards for {_ds_name}...")
+            snapshot_download(
+                repo_id=_repo_id, repo_type="dataset", revision="three-splits",
+                allow_patterns=["data/test-*.parquet"], local_dir=str(_tdir),
+                max_workers=8, token=os.environ.get("HF_TOKEN"),
+            )
 
 cmd = [
     sys.executable, "TRAIN/ALT_THREE_SPLITS/scripts/run_z0_domain_gap.py",
@@ -420,6 +466,10 @@ cmd = [
     "--domain_gap_samples", str(DOMAIN_GAP_SAMPLES),
     "--local_data_dir", str(LOCAL_DATA_DIR),
 ]
+if RUN_MODE == "domain_gap_only":
+    cmd.append("--domain_gap_only")
+else:
+    cmd.extend(["--eval_splits", *EVAL_SPLITS])
 if MAX_EVAL_SAMPLES is not None:
     cmd.extend(["--max_eval_samples", str(MAX_EVAL_SAMPLES)])
 
@@ -455,10 +505,11 @@ import traceback
 import torch
 
 EXP = "B1"                       # "B1" (TextVQA) or "B2" (DocVQA)
-MODEL_KEY = "qwen2_vl_2b"        # "qwen2_vl_2b" | "smolvlm_base" | "smolvlm_500m"
+MODEL_KEY = "smolvlm_500m"       # Primary: "smolvlm_500m" | Scale 2B: "smolvlm_base" | Cross-Arch: "qwen2_vl_2b"
 HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42                        # Seeds: 42, 123, 999
 INCLUDE_OCR = False              # False = Track A (OCR-free primary); True = Track B ablation
+SAVE_EVERY_STEPS = 250           # Mid-epoch checkpoint frequency (resilience against Colab disconnects)
 MAX_TRAIN_STEPS = None           # Set e.g. 20 for smoke test
 MAX_EVAL_SAMPLES = None
 
@@ -470,6 +521,7 @@ cmd = [
     "--hardware_profile", HARDWARE_PROFILE,
     "--local_data_dir", str(LOCAL_DATA_DIR),
     "--hf_ckpt_repo", "gamusa/crossvqa-checkpoints",
+    "--save_every_steps", str(SAVE_EVERY_STEPS),
     "--resume_from_hub",
 ]
 if GDRIVE_BACKUP_DIR:
@@ -511,9 +563,10 @@ import time
 import traceback
 import torch
 
-MODEL_KEY = "qwen2_vl_2b"
+MODEL_KEY = "smolvlm_500m"       # Primary: "smolvlm_500m" | Scale 2B: "smolvlm_base" | Cross-Arch: "qwen2_vl_2b"
 HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
+SAVE_EVERY_STEPS = 250
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None
 
@@ -525,6 +578,7 @@ cmd = [
     "--hardware_profile", HARDWARE_PROFILE,
     "--local_data_dir", str(LOCAL_DATA_DIR),
     "--hf_ckpt_repo", "gamusa/crossvqa-checkpoints",
+    "--save_every_steps", str(SAVE_EVERY_STEPS),
     "--resume_from_hub",
 ]
 if GDRIVE_BACKUP_DIR:
@@ -565,9 +619,10 @@ import traceback
 import torch
 
 EXP = "B4"                       # "B4" (Doc->Text) or "B5" (Text->Doc)
-MODEL_KEY = "qwen2_vl_2b"
+MODEL_KEY = "smolvlm_500m"       # Primary: "smolvlm_500m" | Scale 2B: "smolvlm_base" | Cross-Arch: "qwen2_vl_2b"
 HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
+SAVE_EVERY_STEPS = 250
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None
 
@@ -579,6 +634,7 @@ cmd = [
     "--hardware_profile", HARDWARE_PROFILE,
     "--local_data_dir", str(LOCAL_DATA_DIR),
     "--hf_ckpt_repo", "gamusa/crossvqa-checkpoints",
+    "--save_every_steps", str(SAVE_EVERY_STEPS),
     "--resume_from_hub",
 ]
 if GDRIVE_BACKUP_DIR:
@@ -619,12 +675,13 @@ import traceback
 import torch
 
 EXP = "M2"                       # "M1" | "M2" | "M3"
-MODEL_KEY = "qwen2_vl_2b"        # Pilot first with "smolvlm_500m", then run "qwen2_vl_2b" & "smolvlm_base"
+MODEL_KEY = "smolvlm_500m"       # Primary: "smolvlm_500m" | Scale 2B: "smolvlm_base" | Cross-Arch: "qwen2_vl_2b"
 HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
 ALIGN_TYPE = "mmd"               # "mmd" (default) or "infonce" (ablation)
 INCLUDE_OCR = False              # True for Track B Given-OCR ablation on M2
 SKIP_STAGE1_IF_CACHED = True     # Reuses M_stage1_doc checkpoint across M1/M2/M3
+SAVE_EVERY_STEPS = 250
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None
 
@@ -637,6 +694,7 @@ cmd = [
     "--hardware_profile", HARDWARE_PROFILE,
     "--local_data_dir", str(LOCAL_DATA_DIR),
     "--hf_ckpt_repo", "gamusa/crossvqa-checkpoints",
+    "--save_every_steps", str(SAVE_EVERY_STEPS),
     "--resume_from_hub",
 ]
 if SKIP_STAGE1_IF_CACHED:
@@ -680,11 +738,12 @@ import time
 import traceback
 import torch
 
-MODEL_KEY = "qwen2_vl_2b"
+MODEL_KEY = "smolvlm_500m"       # Primary full-matrix backbone for Hypothesis H4
 HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
 FRACTIONS = [1, 5, 10, 25]
 METHODS = ["B1", "B4", "M2"]
+SAVE_EVERY_STEPS = 250
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None
 
@@ -703,6 +762,7 @@ try:
                 "--hardware_profile", HARDWARE_PROFILE,
                 "--local_data_dir", str(LOCAL_DATA_DIR),
                 "--hf_ckpt_repo", "gamusa/crossvqa-checkpoints",
+                "--save_every_steps", str(SAVE_EVERY_STEPS),
                 "--resume_from_hub",
             ]
             if method == "M2":

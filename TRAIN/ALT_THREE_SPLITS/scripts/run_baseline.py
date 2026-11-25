@@ -41,7 +41,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Run CrossVQA baseline experiments B1–B5.")
     parser.add_argument("--exp", required=True, choices=["B1", "B2", "B3", "B4", "B5"])
-    parser.add_argument("--model", default="qwen2_vl_2b", choices=["qwen2_vl_2b", "smolvlm_base", "smolvlm_500m"])
+    parser.add_argument("--model", default="smolvlm_500m", choices=["smolvlm_500m", "smolvlm_base", "qwen2_vl_2b"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--hardware_profile", default="auto", choices=["auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb", "cpu"])
     parser.add_argument("--epochs", type=int, default=None)
@@ -54,6 +54,7 @@ def main() -> None:
     parser.add_argument("--hf_token", default=None)
     parser.add_argument("--gdrive_backup_dir", default=None)
     parser.add_argument("--resume_from_hub", action="store_true")
+    parser.add_argument("--save_every_steps", type=int, default=250)
     parser.add_argument("--max_train_steps", type=int, default=None)
     parser.add_argument("--max_eval_samples", type=int, default=None)
     args = parser.parse_args()
@@ -117,38 +118,43 @@ def main() -> None:
             )
         adapter_ckpt = str(restored_s1)
 
+    use_4bit = bool(hw.get("load_in_4bit", tr_cfg["load_in_4bit"]) and model_info.get("allow_4bit", True))
     model, processor = build_vlm_model_and_processor(
         model_name_or_key=args.model,
-        load_in_4bit=bool(hw.get("load_in_4bit", tr_cfg["load_in_4bit"])),
+        load_in_4bit=use_4bit,
         use_lora=True,
         lora_r=tr_cfg["lora_r"],
         lora_alpha=tr_cfg["lora_alpha"],
         lora_dropout=tr_cfg["lora_dropout"],
         min_pixels=hw["min_pixels"],
         max_pixels=hw["max_pixels"],
+        smolvlm_longest_edge=hw.get("smolvlm_longest_edge", 2048),
         gradient_checkpointing=True,
         attn_implementation=hw["attn_implementation"],
         adapter_checkpoint=adapter_ckpt,
         architecture_mode="standard_lora",
+        target_modules=model_info.get("target_modules"),
+        exclude_modules=model_info.get("exclude_lora_modules"),
     )
 
     few_shot_manifest = fs_cfg["few_shot_manifest_path"]
+    use_streaming = args.local_data_dir is None
     if args.exp in ("B1", "B4"):
         train_ds = load_crossvqa_dataset(
             "textvqa", "train", "alt_three_splits",
-            streaming=True, local_data_dir=args.local_data_dir,
+            streaming=use_streaming, local_data_dir=args.local_data_dir,
             few_shot_pct=args.few_shot_pct, few_shot_manifest_path=few_shot_manifest,
         )
     elif args.exp in ("B2", "B5"):
         train_ds = load_crossvqa_dataset(
             "docvqa", "train", "alt_three_splits",
-            streaming=True, local_data_dir=args.local_data_dir,
+            streaming=use_streaming, local_data_dir=args.local_data_dir,
         )
     else:  # B3 Joint
-        doc_ds = load_crossvqa_dataset("docvqa", "train", "alt_three_splits", streaming=True, local_data_dir=args.local_data_dir)
+        doc_ds = load_crossvqa_dataset("docvqa", "train", "alt_three_splits", streaming=use_streaming, local_data_dir=args.local_data_dir)
         tv_ds = load_crossvqa_dataset(
             "textvqa", "train", "alt_three_splits",
-            streaming=True, local_data_dir=args.local_data_dir,
+            streaming=use_streaming, local_data_dir=args.local_data_dir,
             few_shot_pct=args.few_shot_pct, few_shot_manifest_path=few_shot_manifest,
         )
         train_ds = InterleavedCrossVQADataset(doc_ds, tv_ds, doc_prob=0.5, seed=args.seed)
@@ -190,6 +196,7 @@ def main() -> None:
         checkpoint_manager=ckpt_mgr,
     )
 
+    save_every = args.save_every_steps if args.save_every_steps and args.save_every_steps > 0 else None
     summary = trainer.fit(
         train_dataset=train_ds,
         epochs=epochs,
@@ -197,6 +204,8 @@ def main() -> None:
         max_steps_per_epoch=args.max_train_steps,
         eval_fn=_eval_val,
         monitor_metric="selection_score",
+        save_every_steps=save_every,
+        seed=args.seed,
     )
 
     card_cfg = {

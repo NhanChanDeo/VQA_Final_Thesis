@@ -197,16 +197,45 @@ def _resolve_projector_module(
     )
 
 
+def _extract_idefics3_tile_counts(
+    batch_size: int,
+    total_tiles: int,
+    pixel_attention_mask: Optional[torch.Tensor] = None,
+    pixel_values: Optional[torch.Tensor] = None,
+) -> Optional[List[int]]:
+    """Computes exact non-pad tile count per sample for Idefics3/SmolVLM variable-tile batches."""
+    if pixel_attention_mask is not None and pixel_attention_mask.dim() == 4 and pixel_attention_mask.shape[0] == batch_size:
+        counts = [max(1, int(c)) for c in pixel_attention_mask.any(dim=(-2, -1)).sum(dim=1).tolist()]
+        if sum(counts) == total_tiles:
+            return counts
+    if pixel_values is not None and pixel_values.dim() == 5 and pixel_values.shape[0] == batch_size:
+        counts = [max(1, int(c)) for c in (pixel_values.abs().sum(dim=(-3, -2, -1)) > 0).sum(dim=1).tolist()]
+        if sum(counts) == total_tiles:
+            return counts
+    return None
+
+
 def _pool_visual_tokens(
     vis_out: Any,
     batch_size: int,
     image_grid_thw: Optional[torch.Tensor] = None,
+    pixel_attention_mask: Optional[torch.Tensor] = None,
+    pixel_values: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     if isinstance(vis_out, (tuple, list)):
         vis_out = vis_out[0]
     if vis_out.dim() == 3:
         if vis_out.shape[0] == batch_size:
             return vis_out.mean(dim=1)
+        tile_counts = _extract_idefics3_tile_counts(
+            batch_size=batch_size,
+            total_tiles=int(vis_out.shape[0]),
+            pixel_attention_mask=pixel_attention_mask,
+            pixel_values=pixel_values,
+        )
+        if tile_counts is not None:
+            chunks = torch.split(vis_out, tile_counts, dim=0)
+            return torch.stack([c.mean(dim=(0, 1)) for c in chunks], dim=0)
         if vis_out.shape[0] % batch_size == 0:
             return vis_out.view(batch_size, -1, vis_out.shape[-1]).mean(dim=1)
     if vis_out.dim() == 2:
@@ -224,10 +253,32 @@ def _pool_visual_tokens(
     raise ValueError(f"Unsupported visual projector output shape {tuple(vis_out.shape)} for batch_size={batch_size}.")
 
 
+class ProjectorAlignmentAdapter(nn.Module):
+    """Zero-initialized residual bottleneck on projector tokens so M2/M3 alignment losses have non-zero gradients."""
+
+    def __init__(self, hidden_dim: int, rank: int = 64) -> None:
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        self.rank = int(rank)
+        self.norm = nn.LayerNorm(self.hidden_dim)
+        self.down = nn.Linear(self.hidden_dim, self.rank, bias=False)
+        self.act = nn.GELU()
+        self.up = nn.Linear(self.rank, self.hidden_dim, bias=True)
+        nn.init.normal_(self.down.weight, std=0.02)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, vis_tokens: torch.Tensor) -> torch.Tensor:
+        orig_dtype = vis_tokens.dtype
+        p_dtype = self.up.weight.dtype
+        delta = self.up(self.act(self.down(self.norm(vis_tokens.to(dtype=p_dtype)))))
+        return vis_tokens + delta.to(dtype=orig_dtype)
+
+
 class CrossVQADualAdapterModel(nn.Module):
     """
-    Wraps a frozen VLM backbone with DualLoRALinear layers and a VisualSoftDomainRouter
-    hooked onto the visual projector/merger output.
+    Wraps a frozen VLM backbone with DualLoRALinear layers, a VisualSoftDomainRouter,
+    and an optional ProjectorAlignmentAdapter (M2/M3) hooked onto the visual projector/merger output.
     """
 
     def __init__(
@@ -242,6 +293,7 @@ class CrossVQADualAdapterModel(nn.Module):
         router_in_dim: Optional[int] = None,
         projector_module_name: Optional[str] = None,
         skip_vision_prefixes: Sequence[str] = ("visual", "vision_model"),
+        align_adapter_rank: int = 0,
     ) -> None:
         super().__init__()
         self.backbone = backbone
@@ -308,21 +360,37 @@ class CrossVQADualAdapterModel(nn.Module):
             tau=self.tau,
         ).to(device=router_device, dtype=router_dtype)
 
+        self.align_adapter_rank = int(align_adapter_rank)
+        self.align_adapter: Optional[ProjectorAlignmentAdapter] = (
+            ProjectorAlignmentAdapter(hidden_dim=in_dim, rank=self.align_adapter_rank).to(
+                device=router_device, dtype=router_dtype
+            )
+            if self.align_adapter_rank > 0
+            else None
+        )
+
         self.projector_name, projector_mod = _resolve_projector_module(self.backbone, projector_module_name)
         self._current_batch_size: Optional[int] = None
         self._current_image_grid_thw: Optional[torch.Tensor] = None
+        self._current_pixel_attention_mask: Optional[torch.Tensor] = None
+        self._current_pixel_values: Optional[torch.Tensor] = None
         self._forced_domain_ids: Optional[torch.Tensor] = None
         self.last_routing_outputs: Dict[str, torch.Tensor] = {}
 
         self._hook_handle = projector_mod.register_forward_hook(self._projector_hook)
 
-    def _projector_hook(self, module: nn.Module, inputs: Tuple[Any, ...], output: Any) -> None:
+    def _projector_hook(self, module: nn.Module, inputs: Tuple[Any, ...], output: Any) -> Any:
         if self._current_batch_size is None:
-            return
+            return None
+        vis_tensor = output[0] if isinstance(output, (tuple, list)) else output
+        adapted = self.align_adapter(vis_tensor) if self.align_adapter is not None else vis_tensor
+
         pooled_vis = _pool_visual_tokens(
-            output,
+            adapted,
             batch_size=self._current_batch_size,
             image_grid_thw=self._current_image_grid_thw,
+            pixel_attention_mask=self._current_pixel_attention_mask,
+            pixel_values=self._current_pixel_values,
         )
         router_param = next(self.router.parameters())
         gate_weights, gate_logits = self.router(
@@ -341,6 +409,13 @@ class CrossVQADualAdapterModel(nn.Module):
             "gate_logits": gate_logits,
             "gate_weights": gate_weights,
         }
+        if self.align_adapter is not None:
+            if isinstance(output, tuple):
+                return (adapted, *output[1:])
+            if isinstance(output, list):
+                return [adapted, *output[1:]]
+            return adapted
+        return None
 
     def set_trainable_stage(self, stage: Literal["doc_only", "scene_only_frozen_doc", "joint"]) -> None:
         if stage == "doc_only":
@@ -356,6 +431,10 @@ class CrossVQADualAdapterModel(nn.Module):
             layer.set_trainable_branch(branch)
         for p in self.router.parameters():
             p.requires_grad = True
+        if self.align_adapter is not None:
+            train_align = stage in ("scene_only_frozen_doc", "joint")
+            for p in self.align_adapter.parameters():
+                p.requires_grad = train_align
 
     def forward(
         self,
@@ -368,6 +447,8 @@ class CrossVQADualAdapterModel(nn.Module):
         elif "pixel_values" in kwargs and isinstance(kwargs["pixel_values"], torch.Tensor):
             self._current_batch_size = int(kwargs["pixel_values"].shape[0])
         self._current_image_grid_thw = kwargs.get("image_grid_thw", None)
+        self._current_pixel_attention_mask = kwargs.get("pixel_attention_mask", None)
+        self._current_pixel_values = kwargs.get("pixel_values", None)
         self._forced_domain_ids = forced_domain_ids
         self.last_routing_outputs = {}
         try:
@@ -375,22 +456,28 @@ class CrossVQADualAdapterModel(nn.Module):
         finally:
             self._current_batch_size = None
             self._current_image_grid_thw = None
+            self._current_pixel_attention_mask = None
+            self._current_pixel_values = None
             self._forced_domain_ids = None
 
     def generate(self, input_ids: Optional[torch.Tensor] = None, **kwargs):
         if input_ids is not None:
             self._current_batch_size = int(input_ids.shape[0])
         self._current_image_grid_thw = kwargs.get("image_grid_thw", None)
+        self._current_pixel_attention_mask = kwargs.get("pixel_attention_mask", None)
+        self._current_pixel_values = kwargs.get("pixel_values", None)
         self._forced_domain_ids = None
         try:
             return self.backbone.generate(input_ids=input_ids, **kwargs)
         finally:
             self._current_batch_size = None
             self._current_image_grid_thw = None
+            self._current_pixel_attention_mask = None
+            self._current_pixel_values = None
             self.context.clear()
 
     def _adapter_state_dict(self) -> Dict[str, torch.Tensor]:
-        trainable_prefixes = ("dual_layers.", "router.")
+        trainable_prefixes = ("dual_layers.", "router.", "align_adapter.")
         state = {}
         for k, v in self.state_dict().items():
             if k.startswith(trainable_prefixes) or ".lora_A_" in k or ".lora_B_" in k:
@@ -411,6 +498,7 @@ class CrossVQADualAdapterModel(nn.Module):
             "tau": self.tau,
             "router_in_dim": self.router.in_dim,
             "router_hidden_dim": self.router_hidden_dim,
+            "align_adapter_rank": self.align_adapter_rank,
             "projector_name": self.projector_name,
         }
         (out_dir / "crossvqa_adapter_config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
@@ -418,8 +506,9 @@ class CrossVQADualAdapterModel(nn.Module):
     def load_pretrained(self, load_directory: str) -> None:
         weights_path = Path(load_directory) / "dual_lora_weights.safetensors"
         loaded = load_safetensors(str(weights_path))
-        expected_keys = set(self._adapter_state_dict().keys())
-        missing = sorted(expected_keys - set(loaded.keys()))
+        # Allow loading Stage-1 (align_adapter_rank=0) checkpoints into M2/M3 (align_adapter_rank>0)
+        expected_core = {k for k in self._adapter_state_dict().keys() if not k.startswith("align_adapter.")}
+        missing = sorted(expected_core - set(loaded.keys()))
         if missing:
             raise KeyError(f"Missing keys in Dual-LoRA checkpoint '{weights_path}': {missing[:5]}")
         self.load_state_dict(loaded, strict=False)

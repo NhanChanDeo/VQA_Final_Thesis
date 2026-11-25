@@ -39,10 +39,11 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Run Proposed CrossVQA M1–M3 experiments.")
     parser.add_argument("--exp", required=True, choices=["M1", "M2", "M3"])
-    parser.add_argument("--model", default="qwen2_vl_2b", choices=["qwen2_vl_2b", "smolvlm_base", "smolvlm_500m"])
+    parser.add_argument("--model", default="smolvlm_500m", choices=["smolvlm_500m", "smolvlm_base", "qwen2_vl_2b"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--hardware_profile", default="auto", choices=["auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb", "cpu"])
     parser.add_argument("--align_type", default=None, choices=["none", "mmd", "infonce"])
+    parser.add_argument("--align_adapter_rank", type=int, default=None)
     parser.add_argument("--lambda_align", type=float, default=None)
     parser.add_argument("--lambda_gate", type=float, default=None)
     parser.add_argument("--few_shot_pct", type=int, default=100, choices=[1, 5, 10, 25, 100])
@@ -54,6 +55,7 @@ def main() -> None:
     parser.add_argument("--gdrive_backup_dir", default=None)
     parser.add_argument("--resume_from_hub", action="store_true")
     parser.add_argument("--skip_stage1", action="store_true", help="Reuse cached M_stage1_doc adapter if available")
+    parser.add_argument("--save_every_steps", type=int, default=250)
     parser.add_argument("--max_train_steps", type=int, default=None)
     parser.add_argument("--max_eval_samples", type=int, default=None)
     args = parser.parse_args()
@@ -72,6 +74,11 @@ def main() -> None:
     align_type = args.align_type or method_cfg.get("align_type", "none")
     lambda_align = args.lambda_align if args.lambda_align is not None else float(method_cfg.get("lambda_align", 0.0))
     lambda_gate = args.lambda_gate if args.lambda_gate is not None else float(method_cfg.get("lambda_gate", 0.1))
+    align_adapter_rank = (
+        args.align_adapter_rank
+        if args.align_adapter_rank is not None
+        else int(method_cfg.get("align_adapter_rank", 64 if (args.exp in ("M2", "M3") and lambda_align > 0.0) else 0))
+    )
 
     ocr_tag = "_ocr" if args.include_ocr else ""
     align_tag = f"_{align_type}" if (args.exp in ("M2", "M3") and align_type == "infonce") else ""
@@ -114,24 +121,31 @@ def main() -> None:
         if restored is not None:
             resume_ckpt = str(restored)
 
+    use_4bit = bool(hw.get("load_in_4bit", tr_cfg["load_in_4bit"]) and model_info.get("allow_4bit", True))
     model, processor = build_vlm_model_and_processor(
         model_name_or_key=args.model,
-        load_in_4bit=bool(hw.get("load_in_4bit", tr_cfg["load_in_4bit"])),
+        load_in_4bit=use_4bit,
         use_lora=True,
         lora_r=tr_cfg["lora_r"],
         lora_alpha=tr_cfg["lora_alpha"],
         lora_dropout=tr_cfg["lora_dropout"],
         min_pixels=hw["min_pixels"],
         max_pixels=hw["max_pixels"],
+        smolvlm_longest_edge=hw.get("smolvlm_longest_edge", 2048),
         gradient_checkpointing=True,
         attn_implementation=hw["attn_implementation"],
         adapter_checkpoint=resume_ckpt,
         architecture_mode="dual_lora",
+        target_modules=model_info.get("target_modules"),
+        exclude_modules=model_info.get("exclude_lora_modules"),
         router_tau=float(method_cfg.get("router_tau", 1.0)),
+        align_adapter_rank=align_adapter_rank,
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     few_shot_manifest = fs_cfg["few_shot_manifest_path"]
+    use_streaming = args.local_data_dir is None
+    save_every = args.save_every_steps if args.save_every_steps and args.save_every_steps > 0 else None
 
     def _eval_val():
         res = evaluate_both_domains(
@@ -159,7 +173,7 @@ def main() -> None:
         print(f"\n=== [{args.exp}] Stage 1: DocVQA Source Adaptation (A_doc + Router) ===")
         model.set_trainable_stage("doc_only")
         model.print_trainable_parameters()
-        doc_train = load_crossvqa_dataset("docvqa", "train", "alt_three_splits", streaming=True, local_data_dir=args.local_data_dir)
+        doc_train = load_crossvqa_dataset("docvqa", "train", "alt_three_splits", streaming=use_streaming, local_data_dir=args.local_data_dir)
         s1_trainer = CrossVQATrainer(
             model=model,
             processor=processor,
@@ -182,6 +196,8 @@ def main() -> None:
             batch_size=hw["per_device_train_batch_size"],
             max_steps_per_epoch=args.max_train_steps,
             forced_domain_id=0,
+            save_every_steps=save_every,
+            seed=args.seed,
         )
 
     # Alignment loss initialization (M2 / M3)
@@ -198,10 +214,10 @@ def main() -> None:
     if args.exp == "M3":
         print("\n=== [M3] Stage 2: Curriculum Pseudo-Domain Homography Bridge ===")
         model.set_trainable_stage("scene_only_frozen_doc")
-        doc_train = load_crossvqa_dataset("docvqa", "train", "alt_three_splits", streaming=True, local_data_dir=args.local_data_dir)
+        doc_train = load_crossvqa_dataset("docvqa", "train", "alt_three_splits", streaming=use_streaming, local_data_dir=args.local_data_dir)
         tv_train = load_crossvqa_dataset(
             "textvqa", "train", "alt_three_splits",
-            streaming=True, local_data_dir=args.local_data_dir,
+            streaming=use_streaming, local_data_dir=args.local_data_dir,
             few_shot_pct=args.few_shot_pct, few_shot_manifest_path=few_shot_manifest,
         )
         paired_curr = PairedDomainDataset(doc_train, tv_train, seed=args.seed + 100)
@@ -236,6 +252,8 @@ def main() -> None:
             max_steps_per_epoch=args.max_train_steps,
             curriculum_start=float(method_cfg.get("curriculum_severity_start", 0.2)),
             curriculum_end=float(method_cfg.get("curriculum_severity_end", 1.0)),
+            save_every_steps=save_every,
+            seed=args.seed + 100,
         )
 
     # Final Transfer Stage: Target TextVQA Adaptation (with frozen A_doc + Paired Alignment)
@@ -243,10 +261,10 @@ def main() -> None:
     model.set_trainable_stage("scene_only_frozen_doc" if freeze_doc else "joint")
     model.print_trainable_parameters()
 
-    doc_train = load_crossvqa_dataset("docvqa", "train", "alt_three_splits", streaming=True, local_data_dir=args.local_data_dir)
+    doc_train = load_crossvqa_dataset("docvqa", "train", "alt_three_splits", streaming=use_streaming, local_data_dir=args.local_data_dir)
     tv_train = load_crossvqa_dataset(
         "textvqa", "train", "alt_three_splits",
-        streaming=True, local_data_dir=args.local_data_dir,
+        streaming=use_streaming, local_data_dir=args.local_data_dir,
         few_shot_pct=args.few_shot_pct, few_shot_manifest_path=few_shot_manifest,
     )
     paired_ds = PairedDomainDataset(doc_train, tv_train, seed=args.seed)
@@ -280,12 +298,14 @@ def main() -> None:
         max_steps_per_epoch=args.max_train_steps,
         eval_fn=_eval_val,
         monitor_metric="selection_score",
+        save_every_steps=save_every,
+        seed=args.seed,
     )
 
     card_cfg = {
         "experiment": {"id": f"{args.exp}_{args.model}{align_tag}{ocr_tag}_seed{args.seed}", "exp": args.exp, "seed": args.seed, "git_sha": get_git_sha()},
         "data": {"regime": "alt_three_splits", "revision": "three-splits", "few_shot_pct": args.few_shot_pct, "include_ocr": args.include_ocr},
-        "model": {"backbone": model_info["repo_id"], "architecture_mode": "dual_lora", "lora_r": tr_cfg["lora_r"], "lora_alpha": tr_cfg["lora_alpha"], "align_type": align_type, "lambda_align": lambda_align, "lambda_gate": lambda_gate},
+        "model": {"backbone": model_info["repo_id"], "architecture_mode": "dual_lora", "lora_r": tr_cfg["lora_r"], "lora_alpha": tr_cfg["lora_alpha"], "align_type": align_type, "align_adapter_rank": align_adapter_rank, "lambda_align": lambda_align, "lambda_gate": lambda_gate},
         "training": {"hardware_profile": hw["name"], "epochs": transfer_epochs, "lr": tr_cfg["learning_rate"], "elapsed_sec": summary["elapsed_sec"]},
     }
     save_run_card(str(run_rel), card_cfg, summary["best_metrics"])

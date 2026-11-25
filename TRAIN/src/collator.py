@@ -35,7 +35,7 @@ class CrossVQADataCollator:
     def __init__(
         self,
         processor,
-        model_type: str = "qwen2_vl",
+        model_type: str = "smolvlm",
         include_ocr: bool = False,
         max_ocr_tokens: int = 50,
         is_train: bool = True,
@@ -49,6 +49,12 @@ class CrossVQADataCollator:
         self.is_train = is_train
         self.use_soft_weights = use_soft_weights
         self.image_transform = image_transform
+
+    def _format_images_for_processor(self, images: List[Any]) -> List[Any]:
+        """Idefics3/SmolVLM processors expect nested [[img], ...] per batch example."""
+        if "smolvlm" in self.model_type or "idefics3" in self.model_type:
+            return [[img] for img in images]
+        return images
 
     def _format_prompt(
         self,
@@ -150,16 +156,17 @@ class CrossVQADataCollator:
             if self.use_soft_weights:
                 sample_weights.append(_compute_soft_weight(item, domain_id))
 
+        proc_images = self._format_images_for_processor(images)
         if self.is_train:
             prompt_inputs = self.processor(
                 text=formatted_prompts,
-                images=images,
+                images=proc_images,
                 padding=True,
                 return_tensors="pt",
             )
             inputs = self.processor(
                 text=full_texts,
-                images=images,
+                images=proc_images,
                 padding=True,
                 return_tensors="pt",
             )
@@ -187,7 +194,7 @@ class CrossVQADataCollator:
         else:
             inputs = self.processor(
                 text=formatted_prompts,
-                images=images,
+                images=proc_images,
                 padding=True,
                 return_tensors="pt",
             )

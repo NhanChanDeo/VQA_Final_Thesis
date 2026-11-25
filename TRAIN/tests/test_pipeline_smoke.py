@@ -32,6 +32,7 @@ from TRAIN.src import (
     FeatureQueue,
     MultiKernelRBFMMDLoss,
     PairedDomainDataset,
+    ProjectorAlignmentAdapter,
     SUPPORTED_MODELS,
     compute_anls,
     compute_forgetting_rate,
@@ -189,9 +190,9 @@ class _TinyVLMWithLinearConnector(nn.Module):
 
 def test_supported_models_locked_order():
     assert list(SUPPORTED_MODELS.items()) == [
-        ("qwen2_vl_2b", "Qwen/Qwen2-VL-2B"),
-        ("smolvlm_base", "HuggingFaceTB/SmolVLM-Base"),
         ("smolvlm_500m", "HuggingFaceTB/SmolVLM-500M-Base"),
+        ("smolvlm_base", "HuggingFaceTB/SmolVLM-Base"),
+        ("qwen2_vl_2b", "Qwen/Qwen2-VL-2B"),
     ]
 
 
@@ -560,3 +561,296 @@ def test_z0_tier1_resolution_bucketing_order_preservation_and_early_exit():
 
     # Verify CPU compute_rkhs_mmd still produces finite non-negative output
     assert compute_rkhs_mmd(embs, embs, device="cpu") == pytest.approx(0.0, abs=1e-6)
+
+    # Verify 00_Z0 notebook contains RUN_MODE and updated primary SmolVLM-500M defaults
+    z0_obj = json.loads((REPO_ROOT / "TRAIN/ALT_THREE_SPLITS/notebooks/00_Z0_ZeroShot_and_DomainGap.ipynb").read_text(encoding="utf-8"))
+    z0_src = "\n".join("".join(c.get("source", [])) for c in z0_obj["cells"])
+    assert 'RUN_MODE = "val_and_domain_gap"' in z0_src
+    assert 'MODEL_KEY = "smolvlm_500m"' in z0_src
+    assert "DOMAIN_GAP_SAMPLES = 794" in z0_src
+    assert "MAX_EVAL_SAMPLES = None" in z0_src
+    assert "--domain_gap_only" in z0_src
+    assert "domain_gap_metrics.json" in z0_src
+
+
+def test_idefics3_variable_tile_pooling():
+    from TRAIN.src.adapters import _pool_visual_tokens
+
+    # Batch of 2 samples with unequal tiles: sample 0 has 3 valid tiles, sample 1 has 1 valid tile
+    t0 = torch.full((3, 4, 16), 2.0)
+    t1 = torch.full((1, 4, 16), 5.0)
+    vis_out = torch.cat([t0, t1], dim=0)  # [4, 4, 16]
+
+    # Case A: 4D pixel_attention_mask [B=2, max_tiles=3, H=8, W=8]
+    mask = torch.zeros((2, 3, 8, 8), dtype=torch.bool)
+    mask[0, :3] = True
+    mask[1, :1] = True
+    pooled_mask = _pool_visual_tokens(vis_out, batch_size=2, pixel_attention_mask=mask)
+    assert pooled_mask.shape == (2, 16)
+    assert torch.allclose(pooled_mask[0], torch.full((16,), 2.0), atol=1e-5)
+    assert torch.allclose(pooled_mask[1], torch.full((16,), 5.0), atol=1e-5)
+
+    # Case B: 5D pixel_values fallback [B=2, max_tiles=3, C=3, H=8, W=8]
+    pv = torch.zeros((2, 3, 3, 8, 8), dtype=torch.float32)
+    pv[0, :3] = 1.0
+    pv[1, :1] = 1.0
+    pooled_pv = _pool_visual_tokens(vis_out, batch_size=2, pixel_values=pv)
+    assert pooled_pv.shape == (2, 16)
+    assert torch.allclose(pooled_pv[0], torch.full((16,), 2.0), atol=1e-5)
+    assert torch.allclose(pooled_pv[1], torch.full((16,), 5.0), atol=1e-5)
+
+
+def test_smolvlm_nested_image_collation():
+    class _ImageCapturingProcessor(_DummyProcessor):
+        def __init__(self) -> None:
+            super().__init__(with_chat_template=False)
+            self.captured_images = []
+
+        def __call__(self, text, images, padding=True, return_tensors="pt"):
+            self.captured_images.append(images)
+            return super().__call__(text=text, images=images, padding=padding, return_tensors=return_tensors)
+
+    img0 = Image.new("RGB", (24, 24), color=(10, 20, 30))
+    img1 = Image.new("RGB", (24, 24), color=(40, 50, 60))
+    samples = [
+        {"domain_type": "document_text", "image": img0, "question": "Q0?", "answers": ["A0"]},
+        {"domain_type": "scene_text", "image": img1, "question": "Q1?", "answers": ["A1"]},
+    ]
+
+    smol_proc = _ImageCapturingProcessor()
+    smol_collator = CrossVQADataCollator(smol_proc, model_type="smolvlm", is_train=False)
+    smol_collator(samples)
+    assert len(smol_proc.captured_images) == 1
+    assert isinstance(smol_proc.captured_images[0], list)
+    assert len(smol_proc.captured_images[0]) == 2
+    assert isinstance(smol_proc.captured_images[0][0], list) and len(smol_proc.captured_images[0][0]) == 1
+
+    qwen_proc = _ImageCapturingProcessor()
+    qwen_collator = CrossVQADataCollator(qwen_proc, model_type="qwen2_vl", is_train=False)
+    qwen_collator(samples)
+    assert isinstance(qwen_proc.captured_images[0], list)
+    assert not isinstance(qwen_proc.captured_images[0][0], list)
+
+
+def test_lora_vision_exclusion_parity(monkeypatch):
+    import types
+    from TRAIN.src.adapters import DualLoRALinear
+    from TRAIN.src.models import _build_lora_config
+
+    class _ModernLoraConfig:
+        def __init__(self, r, lora_alpha, target_modules, lora_dropout, bias, task_type, exclude_modules=None):
+            self.r = r
+            self.target_modules = target_modules
+            self.exclude_modules = exclude_modules
+
+    fake_peft = types.ModuleType("peft")
+    fake_peft.LoraConfig = _ModernLoraConfig
+    monkeypatch.setitem(sys.modules, "peft", fake_peft)
+    cfg_modern = _build_lora_config(
+        lora_r=4,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        target_modules=["q_proj", "v_proj"],
+    )
+    assert list(cfg_modern.exclude_modules) == ["vision_model", "visual"]
+
+    class _LegacyLoraConfig:
+        def __init__(self, r, lora_alpha, target_modules, lora_dropout, bias, task_type):
+            self.r = r
+            self.target_modules = target_modules
+
+    fake_peft_legacy = types.ModuleType("peft")
+    fake_peft_legacy.LoraConfig = _LegacyLoraConfig
+    monkeypatch.setitem(sys.modules, "peft", fake_peft_legacy)
+    cfg_legacy = _build_lora_config(
+        lora_r=4,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        target_modules=["q_proj", "v_proj"],
+    )
+    assert isinstance(cfg_legacy.target_modules, str)
+    assert re.search(cfg_legacy.target_modules, "text_model.layers.0.self_attn.q_proj")
+    assert not re.search(cfg_legacy.target_modules, "vision_model.encoder.q_proj")
+    assert not re.search(cfg_legacy.target_modules, "visual.blocks.0.v_proj")
+
+    class _DummyVisionAndTextBackbone(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.config = type("Cfg", (), {"hidden_size": 8})()
+            self.connector = nn.Linear(8, 8)
+            self.vision_model = nn.Module()
+            self.vision_model.q_proj = nn.Linear(8, 8)
+            self.visual = nn.Module()
+            self.visual.v_proj = nn.Linear(8, 8)
+            self.text_model = nn.Module()
+            self.text_model.q_proj = nn.Linear(8, 8)
+            self.text_model.v_proj = nn.Linear(8, 8)
+
+    wrapped = CrossVQADualAdapterModel(
+        backbone=_DummyVisionAndTextBackbone(),
+        target_modules=["q_proj", "v_proj"],
+        lora_r=4,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        projector_module_name="connector",
+    )
+    assert isinstance(wrapped.backbone.text_model.q_proj, DualLoRALinear)
+    assert not isinstance(wrapped.backbone.vision_model.q_proj, DualLoRALinear)
+    assert not isinstance(wrapped.backbone.visual.v_proj, DualLoRALinear)
+
+
+def test_m2_alignment_loss_has_nonzero_gradients():
+    base = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    wrapper = CrossVQADualAdapterModel(
+        backbone=base,
+        target_modules=["q_proj", "v_proj"],
+        lora_r=4,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        align_adapter_rank=8,
+    )
+    assert wrapper.align_adapter is not None
+    # Verify exact zero initialization (identity start)
+    assert torch.count_nonzero(wrapper.align_adapter.up.weight).item() == 0
+    assert torch.count_nonzero(wrapper.align_adapter.up.bias).item() == 0
+
+    proc = _DummyProcessor(with_chat_template=False)
+    collator = CrossVQADataCollator(proc, model_type="smolvlm", is_train=True)
+    batch = collator([
+        {"domain_type": "document_text", "image": Image.new("RGB", (32, 32), (255, 0, 0)), "question": "doc?", "answers": ["d"]},
+        {"domain_type": "scene_text", "image": Image.new("RGB", (32, 32), (0, 255, 0)), "question": "scn?", "answers": ["s"]},
+    ])
+    mmd_fn = MultiKernelRBFMMDLoss(queue_size=16)
+
+    wrapper.train()
+    wrapper.zero_grad()
+    outputs = wrapper(
+        input_ids=batch["input_ids"],
+        attention_mask=batch["attention_mask"],
+        pixel_values=batch["pixel_values"],
+        labels=batch["labels"],
+    )
+    pooled_vis = wrapper.last_routing_outputs["pooled_vis"]
+    d_ids = batch["domain_ids"]
+    loss_align = mmd_fn(pooled_vis, d_ids)
+    total_loss = outputs.loss + loss_align
+    total_loss.backward()
+
+    align_grads = [
+        p.grad.detach().abs().sum().item()
+        for p in wrapper.align_adapter.parameters()
+        if p.grad is not None
+    ]
+    assert len(align_grads) > 0 and max(align_grads) > 0.0
+
+
+def test_map_style_cosine_lr_schedule_and_mid_epoch_ckpt(tmp_path):
+    class _MapDataset(torch.utils.data.Dataset):
+        def __init__(self, n: int = 16) -> None:
+            self.items = [
+                {
+                    "domain_type": "document_text" if i % 2 == 0 else "scene_text",
+                    "image": Image.new("RGB", (16, 16)),
+                    "question": f"q{i}?",
+                    "answers": ["ans"],
+                }
+                for i in range(n)
+            ]
+
+        def __len__(self) -> int:
+            return len(self.items)
+
+        def __getitem__(self, idx: int):
+            return self.items[idx]
+
+    model = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    proc = _DummyProcessor(with_chat_template=False)
+    run_dir = tmp_path / "run_map"
+    ckpt_mgr = CheckpointManager(local_ckpt_dir=str(run_dir / "checkpoints"), hf_token=None)
+    saved_calls = []
+    orig_save = ckpt_mgr.save
+
+    def _spy_save(mdl, tag="latest", trainer_state=None):
+        saved_calls.append((tag, dict(trainer_state or {})))
+        return orig_save(mdl, tag=tag, trainer_state=trainer_state)
+
+    ckpt_mgr.save = _spy_save
+    trainer = CrossVQATrainer(
+        model=model,
+        processor=proc,
+        run_dir=str(run_dir),
+        model_type="smolvlm",
+        device="cpu",
+        lr=1e-3,
+        warmup_ratio=0.0,
+        gradient_accumulation_steps=1,
+        checkpoint_manager=ckpt_mgr,
+    )
+    summary = trainer.fit(
+        train_dataset=_MapDataset(16),
+        epochs=1,
+        batch_size=4,
+        save_every_steps=2,
+        seed=42,
+    )
+    assert summary["opt_steps"] == 4
+    logs = [json.loads(line) for line in (run_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    lrs = [entry["lr"] for entry in logs]
+    # Exact len(dataloader)=4 yields strictly decreasing cosine LRs with non-zero midpoint & terminal decay
+    assert len(lrs) == 4
+    assert lrs[0] > lrs[1] > lrs[2] > lrs[3]
+    assert ("latest", {"epoch": 1, "opt_step": 2}) in saved_calls
+    assert (run_dir / "checkpoints" / "latest" / "trainer_state.json").exists()
+    assert (run_dir / "checkpoints" / "best" / "trainer_state.json").exists()
+
+
+def test_z0_image_id_dedup_and_notebook_defaults():
+    sys.path.insert(0, str(REPO_ROOT / "TRAIN/ALT_THREE_SPLITS/scripts"))
+    from run_z0_domain_gap import _select_unique_image_indices, extract_domain_embeddings
+
+    samples = [
+        {"sample_id": "s0", "image_id": "img_a", "domain_type": "scene_text", "image": Image.new("RGB", (16, 16)), "question": "q0?", "answers": ["a"]},
+        {"sample_id": "s1", "image_id": "img_a", "domain_type": "scene_text", "image": Image.new("RGB", (16, 16)), "question": "q1?", "answers": ["b"]},
+        {"sample_id": "s2", "image_id": "img_b", "domain_type": "scene_text", "image": Image.new("RGB", (16, 16)), "question": "q2?", "answers": ["c"]},
+        {"sample_id": "s3", "image_id": "img_b", "domain_type": "scene_text", "image": Image.new("RGB", (16, 16)), "question": "q3?", "answers": ["d"]},
+        {"sample_id": "s4", "image_id": "img_c", "domain_type": "scene_text", "image": Image.new("RGB", (16, 16)), "question": "q4?", "answers": ["e"]},
+    ]
+    indices, keys = _select_unique_image_indices(samples, max_samples=10, seed=42)
+    assert len(indices) == 3
+    assert set(keys) == {"img_a", "img_b", "img_c"}
+
+    model = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    proc = _DummyProcessor(with_chat_template=False)
+    embs, ret_keys = extract_domain_embeddings(
+        model=model,
+        processor=proc,
+        model_type="smolvlm",
+        dataset_name="textvqa",
+        split="validation",
+        max_samples=10,
+        batch_size=2,
+        device="cpu",
+        eval_dataset=samples,
+        dedup_by_image_id=True,
+        seed=42,
+        return_keys=True,
+    )
+    assert embs.shape == (3, 16)
+    assert len(set(ret_keys)) == 3
+
+    # Verify all 6 canonical regenerated notebooks default to smolvlm_500m
+    nb_dir = REPO_ROOT / "TRAIN/ALT_THREE_SPLITS/notebooks"
+    canonical_nbs = [
+        "00_Z0_ZeroShot_and_DomainGap.ipynb",
+        "01_B1_B2_SingleDomain_LoRA.ipynb",
+        "02_B3_Joint_MultiDomain_LoRA.ipynb",
+        "03_B4_B5_Sequential_Transfer.ipynb",
+        "04_M1_M3_CrossVQA_Proposed.ipynb",
+        "05_FewShot_Scaling_Matrix.ipynb",
+    ]
+    for name in canonical_nbs:
+        p = nb_dir / name
+        src = "\n".join("".join(c.get("source", [])) for c in json.loads(p.read_text(encoding="utf-8"))["cells"])
+        assert 'MODEL_KEY = "smolvlm_500m"' in src, f"Expected MODEL_KEY='smolvlm_500m' in {p.name}"
+        if p.name != "00_Z0_ZeroShot_and_DomainGap.ipynb":
+            assert "--save_every_steps" in src, f"Expected --save_every_steps in {p.name}"

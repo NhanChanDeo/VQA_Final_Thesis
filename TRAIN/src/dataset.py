@@ -41,6 +41,10 @@ def _apply_few_shot_filter(
     col_name = f"in_{int(few_shot_pct)}pct"
     manifest_df = pl.read_parquet(few_shot_manifest_path)
     valid_ids = set(manifest_df.filter(pl.col(col_name))["sample_id"].to_list())
+    if _is_map_style_dataset(ds) and hasattr(ds, "select"):
+        sample_ids = ds["sample_id"]
+        keep_indices = [i for i, sid in enumerate(sample_ids) if sid in valid_ids]
+        return ds.select(keep_indices)
     return ds.filter(lambda x: x["sample_id"] in valid_ids)
 
 
@@ -99,8 +103,29 @@ def load_crossvqa_dataset(
     raise ValueError(f"Unknown split regime: {split_regime}")
 
 
+def _is_map_style_dataset(ds: Any) -> bool:
+    return (
+        hasattr(ds, "__len__")
+        and hasattr(ds, "__getitem__")
+        and not isinstance(ds, IterableDataset)
+    )
+
+
+def _iter_shuffled_domain(ds: Any, seed: int, shuffle_buffer: int) -> Iterator[Dict[str, Any]]:
+    import random
+
+    if _is_map_style_dataset(ds):
+        indices = list(range(len(ds)))
+        random.Random(seed).shuffle(indices)
+        for idx in indices:
+            yield ds[idx]
+        return
+    stream_ds = ds.shuffle(seed=seed, buffer_size=shuffle_buffer) if hasattr(ds, "shuffle") else ds
+    yield from iter(stream_ds)
+
+
 class InterleavedCrossVQADataset(IterableDataset):
-    """Interleaves DocVQA and TextVQA streams for B3 joint training."""
+    """Interleaves DocVQA and TextVQA streams (or map-style Arrow datasets) for B3 joint training."""
 
     def __init__(
         self,
@@ -116,23 +141,23 @@ class InterleavedCrossVQADataset(IterableDataset):
         self.doc_prob = float(doc_prob)
         self.seed = int(seed)
         self.shuffle_buffer = int(shuffle_buffer)
+        self._epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self._epoch = int(epoch)
+
+    def __len__(self) -> int:
+        if _is_map_style_dataset(self.doc_dataset) and _is_map_style_dataset(self.scene_dataset):
+            return len(self.doc_dataset) + len(self.scene_dataset)
+        raise TypeError("Length unavailable for streaming InterleavedCrossVQADataset.")
 
     def __iter__(self) -> Iterator[Dict[str, Any]]:
         import random
 
-        rng = random.Random(self.seed)
-        doc_ds = (
-            self.doc_dataset.shuffle(seed=self.seed, buffer_size=self.shuffle_buffer)
-            if hasattr(self.doc_dataset, "shuffle")
-            else self.doc_dataset
-        )
-        scene_ds = (
-            self.scene_dataset.shuffle(seed=self.seed + 1, buffer_size=self.shuffle_buffer)
-            if hasattr(self.scene_dataset, "shuffle")
-            else self.scene_dataset
-        )
-        doc_it = iter(doc_ds)
-        scene_it = iter(scene_ds)
+        ep_seed = self.seed + self._epoch * 1009
+        rng = random.Random(ep_seed)
+        doc_it = _iter_shuffled_domain(self.doc_dataset, ep_seed, self.shuffle_buffer)
+        scene_it = _iter_shuffled_domain(self.scene_dataset, ep_seed + 1, self.shuffle_buffer)
         doc_done = False
         scene_done = False
 
@@ -170,20 +195,26 @@ class PairedDomainDataset(IterableDataset):
         self.max_pairs = max_pairs
         self.seed = int(seed)
         self.shuffle_buffer = int(shuffle_buffer)
+        self._epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self._epoch = int(epoch)
+
+    def __len__(self) -> int:
+        if _is_map_style_dataset(self.scene_dataset):
+            n_pairs = len(self.scene_dataset)
+            if self.max_pairs is not None:
+                n_pairs = min(n_pairs, int(self.max_pairs))
+            return 2 * n_pairs
+        if self.max_pairs is not None:
+            return 2 * int(self.max_pairs)
+        raise TypeError("Length unavailable for streaming PairedDomainDataset without max_pairs.")
 
     def __iter__(self) -> Iterator[Dict[str, Any]]:
-        doc_ds = (
-            self.doc_dataset.shuffle(seed=self.seed, buffer_size=self.shuffle_buffer)
-            if hasattr(self.doc_dataset, "shuffle")
-            else self.doc_dataset
-        )
-        scene_ds = (
-            self.scene_dataset.shuffle(seed=self.seed + 1, buffer_size=self.shuffle_buffer)
-            if hasattr(self.scene_dataset, "shuffle")
-            else self.scene_dataset
-        )
-        doc_it = iter(doc_ds)
-        scene_it = iter(scene_ds)
+        ep_seed = self.seed + self._epoch * 1009
+        doc_cycle = 0
+        doc_it = _iter_shuffled_domain(self.doc_dataset, ep_seed, self.shuffle_buffer)
+        scene_it = _iter_shuffled_domain(self.scene_dataset, ep_seed + 1, self.shuffle_buffer)
 
         pairs_emitted = 0
         # Primary target epoch stops once TextVQA (target) completes unless max_pairs is set
@@ -198,7 +229,8 @@ class PairedDomainDataset(IterableDataset):
             try:
                 doc_sample = next(doc_it)
             except StopIteration:
-                doc_it = iter(doc_ds)
+                doc_cycle += 1
+                doc_it = _iter_shuffled_domain(self.doc_dataset, ep_seed + doc_cycle * 37, self.shuffle_buffer)
                 try:
                     doc_sample = next(doc_it)
                 except StopIteration:

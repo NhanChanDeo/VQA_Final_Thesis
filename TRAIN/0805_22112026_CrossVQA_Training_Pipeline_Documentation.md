@@ -63,14 +63,18 @@ TRAIN/
 
 | Priority | Key | Hugging Face Repo ID | Architecture | Rationale in CrossVQA |
 | :---: | :--- | :--- | :--- | :--- |
-| **1 (Primary)** | `qwen2_vl_2b` | `Qwen/Qwen2-VL-2B` | 32L ViT + 2×2 Merger + 28L Qwen2 (M-RoPE) | Native dynamic resolution handles the **4.8× resolution gap** (3.7 MP DocVQA vs 0.78 MP TextVQA) without fixed-square distortion or manual tiling. |
-| **2 (Secondary 1)** | `smolvlm_base` | `HuggingFaceTB/SmolVLM-Base` | `Idefics3` (27L ViT + Pixel Shuffle + 24L SmolLM2) | Same ~2B parameter class as `Qwen2-VL-2B`; provides a clean **cross-architecture comparison** (M-RoPE dynamic resolution vs `Idefics3` tile splitting). |
-| **3 (Secondary 2)** | `smolvlm_500m` | `HuggingFaceTB/SmolVLM-500M-Base` | `Idefics3` (12L ViT + Pixel Shuffle + 32L Llama) | **Fast pilot & scale ablation** backbone for validating M1–M3 training dynamics, loss weights, and 3-seed variance before committing full L4/T4 hours to 2B runs. |
+| **1 (Primary)** | `smolvlm_500m` | `HuggingFaceTB/SmolVLM-500M-Base` | `Idefics3` (12L ViT + Pixel Shuffle + 32L Llama) | **Primary Experimental Workhorse:** Pure `bf16`/`fp16` LoRA (`allow_4bit=false`), high T4/L4 throughput, non-saturated `Z0` floor, and 3-seed + full ablation coverage (`Z0`, `B1–B5`, `M1–M3`, Few-Shot). |
+| **2 (Secondary 1)** | `smolvlm_base` | `HuggingFaceTB/SmolVLM-Base` | `Idefics3` (27L ViT + Pixel Shuffle + 24L SmolLM2) | **Intra-Family Scale Control (2.2B):** Shared `Idefics3` tile-splitting topology vs `smolvlm_500m`; tests whether scale changes `B1–B5`/`M2` transfer dynamics (`Z0`, `B1`, `B2`, `B4`, `M2`). |
+| **3 (Secondary 2)** | `qwen2_vl_2b` | `Qwen/Qwen2-VL-2B` | 32L ViT + 2×2 Merger + 28L Qwen2 (M-RoPE) | **Cross-Architecture & Saturation Anchor:** Native dynamic resolution without tiling; high pre-trained OCR baseline (`Z0` pilot `0.9458` DocVQA ANLS / `0.8153` TextVQA Acc) serves as a saturation reference (`Z0`, `B1`, `B2`, `B4`, `M2`). |
 
 * **Contamination Hygiene:** All three checkpoints are **Base** (pre-trained only, non-`-Instruct`) checkpoints. Evaluating `Z0` first on `NEW_validation` and `NEW_test` establishes the unadapted floor and audits pre-training memorization.
 
-### 2.2 Selective 4-Bit NF4 Quantization
-Quantizing early patch/projection weights in the vision encoder degrades legibility of small 6–8 pt characters in DocVQA scans. Therefore, `build_vlm_model_and_processor()` applies 4-bit NF4 QLoRA **only to the LLM decoder**, explicitly exempting the vision encoder and multimodal connector (`llm_int8_skip_modules=["visual", "merger"]` for Qwen2-VL; `["vision_model", "connector"]` for SmolVLM).
+### 2.2 Selective 4-Bit NF4 Quantization & Vision Module Parity
+Quantizing early patch/projection weights in the vision encoder degrades legibility of small 6–8 pt characters in DocVQA scans. Therefore:
+* `smolvlm_500m` disables 4-bit quantization (`allow_4bit=false`) and always runs pure `bfloat16` (SM $\ge$ 8.0) or `float16` (T4 SM 7.5) LoRA.
+* `smolvlm_base` and `qwen2_vl_2b` apply 4-bit NF4 QLoRA **only to the LLM decoder**, explicitly exempting the vision encoder and multimodal connector (`llm_int8_skip_modules=["visual", "merger"]` for Qwen2-VL; `["vision_model", "connector"]` for SmolVLM).
+* Both `standard_lora` (`B1–B5`) and `DualLoRALinear` (`M1–M3`) exclude vision/connector projections (`exclude_modules=["vision_model", "visual"]`) so parameter budgets stay strictly comparable across architectures.
+* `SmolVLM` image processors enforce `size={"longest_edge": ...}` (`1536` on T4, `2048` on L4/A100/G4) to balance document readability and VRAM.
 
 ### 2.3 Hardware Profiles (`l4_24gb` Primary, `a100_40gb` Second, `g4_96gb`, `t4_16gb` Fallback)
 `resolve_hardware_profile("auto")` inspects CUDA VRAM and compute capability (SM) following `preferred_order: ["l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"]`:
@@ -102,7 +106,12 @@ Quantizing early patch/projection weights in the vision encoder degrades legibil
 ## 4. Experimental Matrix & Proposed CrossVQA Method (`Z0`, `B1–B5`, `M1–M3`)
 
 ### 4.1 Phase A Diagnostics & Baselines (`run_z0_domain_gap.py`, `run_baseline.py`)
-* **Z0 (Zero-Shot + A8/A9):** Evaluates frozen base VLM on `NEW_validation` and `NEW_test`, extracts pooled visual-projector embeddings ($N=2,000$/domain), projects 2D **UMAP** (`A8`), and computes **RKHS MMD** and 5-fold stratified Linear **Proxy $\mathcal{A}$-distance** (`A9`: $\hat{d}_{\mathcal{A}} = 2(1 - 2\epsilon)$) to test **Hypothesis H1**.
+* **Z0 (Zero-Shot + A8/A9):** Evaluates frozen base VLM on `NEW_validation` (and optional `NEW_test`), extracts pooled visual-projector embeddings ($N=794$ `image_id`-deduplicated samples/domain, balanced across domains), projects 2D **UMAP** (`A8`), and computes **RKHS MMD** and 5-fold stratified Linear **Proxy $\mathcal{A}$-distance** (`A9`: $\hat{d}_{\mathcal{A}} = 2(1 - 2\epsilon)$) to test **Hypothesis H1**. Partial evaluation runs merge non-destructively into `val_metrics.json`.
+  * **Tier 1 Exact-Parity Z0 Optimizations:**
+    1. **Pure `bf16`/`fp16` Inference (`load_in_4bit=False` default in `run_z0_domain_gap.py`):** Eliminates per-token BitsAndBytes NF4 dequantization overhead and auto-doubles `eval_batch_size` on `l4_24gb` (`8 -> 16`), `a100_40gb` (`16 -> 32`), and `g4_96gb` (`32 -> 64`); pass `--load_in_4bit` only if needed.
+    2. **Stage A/B Validation Fusion (`evaluate_both_domains` in `_common.py`):** Captures `image_id`-deduplicated, L2-normalized pooled visual-projector embeddings directly during `validation` `generate()` prefill (using exact per-sample tile counts from `pixel_attention_mask` / 5D `pixel_values` for `Idefics3`), eliminating Stage B's duplicate image decoding and redundant LLM forward passes. When standalone `extract_domain_embeddings()` is invoked (e.g. `domain_gap_only` or `max_eval_samples < domain_gap_samples`), a `_ProjectorCaptured` sentinel hook exits right after the visual projector so downstream LLM decoder layers are skipped.
+    3. **Memory-Mapped Local Arrow + Multi-Worker `DataLoader` + Resolution Bucketing (`run_evaluation` in `src/trainer.py`):** Loads local NVMe Parquet shards with `streaming=False`, prefetches/collates via `DataLoader` (`num_workers=4` on Linux+CUDA, `pin_memory=True`), sorts evaluation indices by image pixel area (via metadata or lazy PIL header parsing) to minimize left-padding waste, restores exact original sample order on return, and runs under `torch.inference_mode()`.
+    4. **GPU-Accelerated RKHS MMD (`compute_rkhs_mmd` in `src/losses.py`):** Computes the multi-kernel RBF distance matrices on CUDA when available instead of CPU.
 * **B1 (Target-Only):** LoRA on TextVQA `train` (reference target bound).
 * **B2 (Source-Only):** LoRA on DocVQA `train` (evaluates OOD zero-shot transfer to TextVQA, **H2**).
 * **B3 (Joint):** Shared LoRA on interleaved DocVQA + TextVQA (audits negative transfer).
@@ -133,8 +142,8 @@ flowchart LR
    * **Stage 1 (`doc_only`):** Trains $\mathcal{A}_{\text{doc}}$ + router on DocVQA (`forced_domain_id=0`).
    * **Stage 2 (`scene_only_frozen_doc`):** Freezes $\mathcal{A}_{\text{doc}}$ completely to prevent catastrophic forgetting (**RQ3 / H3**) while training $\mathcal{A}_{\text{scene}}$ + router on paired DocVQA + TextVQA data.
 
-2. **M2 — Cross-Domain Feature Alignment (`losses.py`):**
-   * Adds $\lambda_{\text{align}} \mathcal{L}_{\text{align}}$ on L2-normalized pooled visual-projector embeddings `pooled_vis`.
+2. **M2 — Cross-Domain Feature Alignment (`losses.py` & `adapters.py`):**
+   * Inserts a zero-initialized residual `ProjectorAlignmentAdapter` (`rank=64` in `M2`/`M3`, `0` in `M1`) directly after the frozen multimodal projector so $\mathcal{L}_{\text{align}}$ produces non-zero gradients on aligned `pooled_vis` representations while starting at exact identity.
    * **Default (`MultiKernelRBFMMDLoss`):** Multi-bandwidth Gaussian RBF MMD ($\sigma \in \{0.5, 1.0, 2.0, 4.0, 8.0\}$) backed by dual-domain **FIFO `FeatureQueue` (`size=256`)**. The queue provides stable distributional statistics on 16–24 GB GPUs where `batch_size` is only 2–4, while gradients flow cleanly through current micro-batch features.
    * **Ablation (`CrossDomainInfoNCELoss`):** Temperature-scaled (`0.07`) contrastive prototype alignment selectable via `--align_type infonce`.
 
@@ -160,5 +169,5 @@ To evaluate **Hypothesis H4** cleanly without data leakage, TextVQA `NEW_train` 
 2. `01_B1_B2_SingleDomain_LoRA.ipynb` (Run `B1` and `B2` across seeds `42, 123, 999`)
 3. `02_B3_Joint_MultiDomain_LoRA.ipynb`
 4. `03_B4_B5_Sequential_Transfer.ipynb` (Restores `B2` / `B1` automatically)
-5. `04_M1_M3_CrossVQA_Proposed.ipynb` (Prototype on `smolvlm_500m`, then run `qwen2_vl_2b` & `smolvlm_base`)
+5. `04_M1_M3_CrossVQA_Proposed.ipynb` (Full `M1–M3` matrix & 3 seeds on `smolvlm_500m`, plus `M2` cross-scale/cross-arch on `smolvlm_base` & `qwen2_vl_2b`)
 6. `05_FewShot_Scaling_Matrix.ipynb` (`1%, 5%, 10%, 25%` across `B1`, `B4`, `M2`)

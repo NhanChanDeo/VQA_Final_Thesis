@@ -14,10 +14,10 @@ All parameters below (except gated `google/paligemma-3b-pt-448`, noted from offi
 
 | Backbone Repo | HF Architecture Class | Vision Encoder | Connector / Spatial Mechanism | Language / Decoder Backbone | Primary Role in CrossVQA |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`Qwen/Qwen2-VL-2B`** | `Qwen2VLForConditionalGeneration` (`qwen2_vl`) | 32L ViT (`embed_dim=1280`, `heads=16`, `patch=14`) | 2×2 Spatial Merger (`spatial_merge_size=2`, projects to `1536`) + 2D/3D M-RoPE | 28L Qwen2 (`hidden=1536`, `ffn=8960`, `12` Q-heads / `2` KV-heads GQA, `vocab=151,936`, `ctx=32,768`) | **Primary Workhorse:** Native dynamic resolution handles 4.8× Doc↔Text resolution gap |
-| **`HuggingFaceTB/SmolVLM-500M-Base`** | `Idefics3ForConditionalGeneration` (`idefics3`) | 12L ViT (`hidden=768`, `heads=12`, `patch=16`, `image_size=512`, `ffn=3072`) | Pixel Shuffle connector + tile splitting | 32L Llama (`hidden=960`, `15` Q-heads / `5` KV-heads GQA, `ffn=2560`, `vocab=49,280`, `ctx=8,192`) | **Fast Pilot / Multi-Seed:** Rapid hyperparameter sweeps & ablations on 16GB T4 |
-| **`HuggingFaceTB/SmolVLM-Instruct`** *(2B class)* | `Idefics3ForConditionalGeneration` (`idefics3`) | 27L ViT (`hidden=1152`, `heads=16`, `patch=14`, `image_size=384`, `ffn=4304`) | Pixel Shuffle connector + tile splitting | 24L Llama/SmolLM2 (`hidden=2048`, `heads=32`, `kv_heads=32`, `ffn=8192`, `vocab=49,155`, `ctx=16,384`) | **Compact 2B Alternative:** Note `-Instruct` requires Z0 contamination check |
-| **`google/paligemma-3b-pt-448`** *(gated)* | `PaliGemmaForConditionalGeneration` | SigLIP-So400m (`hidden=1152`, 27L, `patch=14`, fixed 448²/896²) | Linear Multimodal Projector | Gemma-2B (`vocab` includes `<loc0000>..<loc1023>` spatial tokens) | **High-Res Transfer Reference:** Pre-trained (`-pt`) checkpoint; requires HF token & license |
+| **`HuggingFaceTB/SmolVLM-500M-Base`** | `Idefics3ForConditionalGeneration` (`idefics3`) | 12L ViT (`hidden=768`, `heads=12`, `patch=16`, `image_size=512`, `ffn=3072`) | Pixel Shuffle connector + tile splitting | 32L Llama (`hidden=960`, `15` Q-heads / `5` KV-heads GQA, `ffn=2560`, `vocab=49,280`, `ctx=8,192`) | **Primary Workhorse (Tier 1):** Pure `bf16`/`fp16` full matrix (`Z0`, `B1–B5`, `M1–M3`, 3 seeds, Few-Shot, ablations) |
+| **`HuggingFaceTB/SmolVLM-Base`** *(2.2B)* | `Idefics3ForConditionalGeneration` (`idefics3`) | 27L ViT (`hidden=1152`, `heads=16`, `patch=14`, `image_size=384`, `ffn=4304`) | Pixel Shuffle connector + tile splitting | 24L SmolLM2 (`hidden=2048`, `heads=32`, `kv_heads=32`, `ffn=8192`, `vocab=49,155`, `ctx=16,384`) | **Intra-Family Scale Control (Tier 2):** Same `Idefics3` topology at 2.2B scale (`Z0`, `B1`, `B2`, `B4`, `M2`) |
+| **`Qwen/Qwen2-VL-2B`** | `Qwen2VLForConditionalGeneration` (`qwen2_vl`) | 32L ViT (`embed_dim=1280`, `heads=16`, `patch=14`) | 2×2 Spatial Merger (`spatial_merge_size=2`, projects to `1536`) + 2D/3D M-RoPE | 28L Qwen2 (`hidden=1536`, `ffn=8960`, `12` Q-heads / `2` KV-heads GQA, `vocab=151,936`, `ctx=32,768`) | **Cross-Arch & Saturation Anchor (Tier 3):** Native dynamic resolution & high OCR ceiling reference (`Z0`, `B1`, `B2`, `B4`, `M2`) |
+| **`google/paligemma-3b-pt-448`** *(gated)* | `PaliGemmaForConditionalGeneration` | SigLIP-So400m (`hidden=1152`, 27L, `patch=14`, fixed 448²/896²) | Linear Multimodal Projector | Gemma-2B (`vocab` includes `<loc0000>..<loc1023>` spatial tokens) | **Optional Reference:** Pre-trained (`-pt`) checkpoint; requires HF token & license |
 | **`google/pix2struct-base`** | `Pix2StructForConditionalGeneration` (`pix2struct`) | 12L ViT (`hidden=768`, `heads=12`, `patch=16`, variable aspect-ratio packing) | Direct encoder-decoder cross-attention | 12L Pix2Struct Text Decoder (`hidden=768`, `heads=12`, `vocab=50,244`) | **Classic OCR-Free Reference:** Zero LLM pre-training contamination |
 | **`naver-clova-ix/donut-base`** | `VisionEncoderDecoderModel` (`vision-encoder-decoder`) | 4-stage `donut-swin` (`embed=128`, `hidden=1024`, `heads=[4,8,16,32]`, `patch=4`, `image=[2560,1920]`) | Encoder-Decoder Cross-Attention | 4L mBART Decoder (`d_model=1024`, `vocab=57,525`, `ctx=1,536`) | **Classic Document OCR-Free:** Document-native baseline without LLM priors |
 
@@ -25,20 +25,21 @@ All parameters below (except gated `google/paligemma-3b-pt-448`, noted from offi
 
 ## 2. Detailed Technical Profiles
 
-### 2.1 `Qwen/Qwen2-VL-2B` (Primary Workhorse)
+### 2.1 `HuggingFaceTB/SmolVLM-500M-Base` & `SmolVLM-Base` (`Idefics3`) — Primary Workhorse & Scale Control
+- **Papers:** [`Marafioti_2025_SmolVLM.pdf`](../PLAN/Papers/Model%20Info/Marafioti_2025_SmolVLM.pdf) (`arXiv:2504.05299`), [`Laurencon_2024_Idefics3.pdf`](../PLAN/Papers/Model%20Info/Laurencon_2024_Idefics3.pdf) (`arXiv:2408.12637`)
+- **Architecture:** Implements the `Idefics3` image-splitting pipeline combined with **Pixel Shuffle** spatial compression, packing multiple patch embeddings into a single visual token to drastically cut context length and KV-cache VRAM.
+- **Role in `TRAIN/`:** `SmolVLM-500M-Base` (`768`-dim 12-layer ViT + `960`-dim 32-layer Llama decoder, `vocab_size=49,280`) runs pure `bf16`/`fp16` LoRA (`allow_4bit=false`) across the full CrossVQA matrix (`Z0`, `B1–B5`, `M1–M3`, 3 seeds, Few-Shot, ablations). `SmolVLM-Base` (`2.2B`) serves as the **intra-family scale control** on `Z0`, `B1`, `B2`, `B4`, `M2`.
+- **Collation & Processor Setting:** Requires nested image lists (`images=[[img] for img in images]`) and `size={"longest_edge": 1536}` (T4) / `2048` (L4/A100/G4).
+
+### 2.2 `Qwen/Qwen2-VL-2B` — Cross-Architecture & Saturation Anchor
 - **Papers:** [`Wang_2024_Qwen2_VL.pdf`](../PLAN/Papers/Model%20Info/Wang_2024_Qwen2_VL.pdf) (`arXiv:2409.12191`), [`Dehghani_2023_NaViT.pdf`](../PLAN/Papers/Model%20Info/Dehghani_2023_NaViT.pdf) (`arXiv:2307.06304`)
 - **Vision Tokenization Math:**
   - Patches are extracted with `patch_size = 14`, then grouped by `spatial_merge_size = 2` ($2 \times 2$ patches merged into 1 LLM input token).
   - Effective visual stride is $14 \times 2 = 28\text{ px}$ per token dimension:
     $$N_{\text{visual\_tokens}} \approx \left\lceil \frac{H}{28} \right\rceil \times \left\lceil \frac{W}{28} \right\rceil$$
   - Example: An unconstrained $1695 \times 2025$ DocVQA scan generates $\approx 61 \times 73 \approx 4,453$ visual tokens. Bounding `max_pixels` is therefore mandatory on 16–24 GB GPUs.
-- **Positional Encoding:** Multimodal Rotary Position Embedding (M-RoPE) decomposes rotary positions into temporal, height, and width components, preserving 2D document layout and spatial alignment across arbitrary aspect ratios.
+- **Positional Encoding & Role:** Multimodal Rotary Position Embedding (M-RoPE) preserves 2D document layout without tiling. Because `Z0` pilot evaluation on `NEW_validation` already achieves `0.9458` DocVQA ANLS and `0.8153` TextVQA VQA Accuracy, `Qwen2-VL-2B` is designated as the **Cross-Architecture & Pre-Training Saturation Anchor** (`Z0`, `B1`, `B2`, `B4`, `M2`).
 - **Contamination Hygiene:** Always load `Qwen/Qwen2-VL-2B` (Base), **not** `-Instruct`, and run `Z0` zero-shot evaluation on `NEW_test` before fine-tuning.
-
-### 2.2 `HuggingFaceTB/SmolVLM-500M-Base` & `SmolVLM-2B` (`Idefics3`)
-- **Papers:** [`Marafioti_2025_SmolVLM.pdf`](../PLAN/Papers/Model%20Info/Marafioti_2025_SmolVLM.pdf) (`arXiv:2504.05299`), [`Laurencon_2024_Idefics3.pdf`](../PLAN/Papers/Model%20Info/Laurencon_2024_Idefics3.pdf) (`arXiv:2408.12637`)
-- **Architecture:** Implements the `Idefics3` image-splitting pipeline combined with **Pixel Shuffle** spatial compression, packing multiple patch embeddings into a single visual token to drastically cut context length and KV-cache VRAM.
-- **Role in `TRAIN/`:** `SmolVLM-500M-Base` uses a `768`-dim 12-layer ViT and a `960`-dim 32-layer Llama decoder (`vocab_size=49,280`), making it ideal for fast 3-seed pilot tests (`42, 123, 999`) and debugging custom dual-adapter / MMD loss code before scaling to `Qwen2-VL-2B`.
 
 ### 2.3 `google/paligemma-3b-pt-*` & `PaliGemma 2`
 - **Papers:** [`Beyer_2024_PaliGemma.pdf`](../PLAN/Papers/Beyer_2024_PaliGemma.pdf) (`arXiv:2407.07726`), [`Steiner_2024_PaliGemma2.pdf`](../PLAN/Papers/Model%20Info/Steiner_2024_PaliGemma2.pdf) (`arXiv:2412.03555`), [`Zhai_2023_SigLIP.pdf`](../PLAN/Papers/Model%20Info/Zhai_2023_SigLIP.pdf) (`arXiv:2303.15343`)

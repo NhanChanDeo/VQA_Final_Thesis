@@ -1,5 +1,6 @@
 # Proposed CrossVQA Architectures M1–M3 Configuration (ALT_THREE_SPLITS Regime)
 regime: "alt_three_splits"
+default_backbone: "smolvlm_500m"
 hf_dataset_revision: "three-splits"
 manifest_path: "DATA_PIPELINE/ALT_THREE_SPLITS/splits/crossvqa_split_manifest_pooled.parquet"
 runs_root: "TRAIN/ALT_THREE_SPLITS/runs"
@@ -8,6 +9,7 @@ checkpoints:
   hf_repo_id: "gamusa/crossvqa-checkpoints"
   hf_private: true
   gdrive_backup_root: "/content/drive/MyDrive/CrossVQA_Checkpoints/ALT_THREE_SPLITS"
+  save_every_steps: 250
 
 training:
   load_in_4bit: true
@@ -28,6 +30,7 @@ methods:
     lambda_gate: 0.1
     lambda_align: 0.0
     align_type: "none"
+    align_adapter_rank: 0
     stage1_doc_epochs: 1
     stage2_transfer_epochs: 2
     freeze_doc_in_stage2: true
@@ -38,6 +41,7 @@ methods:
     lambda_gate: 0.1
     lambda_align: 0.1
     align_type: "mmd"
+    align_adapter_rank: 64
     mmd_sigmas: [0.5, 1.0, 2.0, 4.0, 8.0]
     queue_size: 256
     stage1_doc_epochs: 1
@@ -50,6 +54,7 @@ methods:
     lambda_gate: 0.1
     lambda_align: 0.1
     align_type: "mmd"
+    align_adapter_rank: 64
     queue_size: 256
     stage1_doc_epochs: 1
     stage2_curriculum_epochs: 1

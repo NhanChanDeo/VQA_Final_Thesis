@@ -6,7 +6,9 @@ utilities for CrossVQA baselines (Z0, B1–B5) and proposed methods (M1–M3).
 import io
 import json
 import math
+import os
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -33,6 +35,7 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "eval_batch_size": 8,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 1280 * 1024,
+        "smolvlm_longest_edge": 2048,
         "optim": "paged_adamw_8bit",
     },
     "a100_40gb": {
@@ -45,6 +48,7 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "eval_batch_size": 16,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 1536 * 1024,
+        "smolvlm_longest_edge": 2048,
         "optim": "paged_adamw_8bit",
     },
     "g4_96gb": {
@@ -57,6 +61,7 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "eval_batch_size": 32,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 2048 * 1024,
+        "smolvlm_longest_edge": 2048,
         "optim": "adamw",
     },
     "t4_16gb": {
@@ -69,6 +74,7 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "eval_batch_size": 4,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 1024 * 1024,
+        "smolvlm_longest_edge": 1536,
         "optim": "paged_adamw_8bit",
     },
     "cpu": {
@@ -81,6 +87,7 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "eval_batch_size": 2,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 512 * 512,
+        "smolvlm_longest_edge": 512,
         "optim": "adamw",
     },
 }
@@ -352,6 +359,7 @@ class _EvalCollateWrapper:
             {
                 "_orig_idx": orig_idx,
                 "sample_id": sample.get("sample_id", ""),
+                "image_id": sample.get("image_id", ""),
                 "domain_type": sample.get("domain_type", ""),
                 "question": sample.get("question", ""),
                 "answers": sample.get("answers") or [sample.get("canonical_answer", "")],
@@ -419,7 +427,7 @@ def run_evaluation(
     max_new_tokens: int = 32,
     metric_type: str = "both",
     max_eval_samples: Optional[int] = None,
-    model_type: str = "qwen2_vl",
+    model_type: str = "smolvlm",
     include_ocr: bool = False,
     max_ocr_tokens: int = 50,
     eval_batch_size: int = 4,
@@ -555,7 +563,7 @@ class CrossVQATrainer:
         model,
         processor,
         run_dir: str,
-        model_type: str = "qwen2_vl",
+        model_type: str = "smolvlm",
         device: Optional[str] = None,
         lr: float = 2e-4,
         weight_decay: float = 0.01,
@@ -619,6 +627,8 @@ class CrossVQATrainer:
         curriculum_start: float = 0.2,
         curriculum_end: float = 1.0,
         save_every_steps: Optional[int] = None,
+        estimated_batches_per_epoch: Optional[int] = None,
+        seed: int = 42,
     ) -> Dict[str, Any]:
         collator = CrossVQADataCollator(
             self.processor,
@@ -628,17 +638,36 @@ class CrossVQATrainer:
             use_soft_weights=self.use_soft_weights,
             image_transform=self.curriculum_transform,
         )
-        dataloader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            collate_fn=collator,
-            pin_memory=torch.cuda.is_available(),
+        is_map_style = (
+            hasattr(train_dataset, "__len__")
+            and hasattr(train_dataset, "__getitem__")
+            and not isinstance(train_dataset, IterableDataset)
         )
+        eff_workers = (
+            min(2, os.cpu_count() or 1)
+            if (is_map_style and torch.cuda.is_available() and sys.platform != "win32")
+            else 0
+        )
+        dl_kwargs: Dict[str, Any] = {
+            "batch_size": batch_size,
+            "collate_fn": collator,
+            "pin_memory": torch.cuda.is_available(),
+            "num_workers": eff_workers,
+        }
+        if is_map_style:
+            dl_gen = torch.Generator()
+            dl_gen.manual_seed(int(seed))
+            dl_kwargs["shuffle"] = True
+            dl_kwargs["generator"] = dl_gen
+        if eff_workers > 0:
+            dl_kwargs["prefetch_factor"] = 2
+
+        dataloader = DataLoader(train_dataset, **dl_kwargs)
 
         try:
             batches_per_epoch = len(dataloader)
         except TypeError:
-            batches_per_epoch = max_steps_per_epoch or 1000
+            batches_per_epoch = estimated_batches_per_epoch or max_steps_per_epoch or 1000
         if max_steps_per_epoch is not None:
             batches_per_epoch = min(batches_per_epoch, max_steps_per_epoch)
 
@@ -660,6 +689,8 @@ class CrossVQATrainer:
 
         start_time = time.time()
         for epoch in range(1, epochs + 1):
+            if hasattr(train_dataset, "set_epoch"):
+                train_dataset.set_epoch(epoch - 1)
             self.model.train()
             optimizer.zero_grad()
             acc_total, acc_gen, acc_align, acc_gate, acc_router_acc = 0.0, 0.0, 0.0, 0.0, 0.0

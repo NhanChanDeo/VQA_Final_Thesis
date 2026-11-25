@@ -4,7 +4,13 @@ Supports Qwen/Qwen2-VL-2B, HuggingFaceTB/SmolVLM-Base, and SmolVLM-500M-Base
 across both ALT_THREE_SPLITS and VALIDATION_AS_TEST split regimes.
 """
 
-from .adapters import CrossVQADualAdapterModel, DualLoRAContext, DualLoRALinear, VisualSoftDomainRouter
+from .adapters import (
+    CrossVQADualAdapterModel,
+    DualLoRAContext,
+    DualLoRALinear,
+    ProjectorAlignmentAdapter,
+    VisualSoftDomainRouter,
+)
 from .augmentations import CurriculumPseudoDomainTransform
 from .collator import CrossVQADataCollator
 from .dataset import (
@@ -50,6 +56,7 @@ __all__ = [
     "CrossVQADataCollator",
     "DualLoRAContext",
     "DualLoRALinear",
+    "ProjectorAlignmentAdapter",
     "VisualSoftDomainRouter",
     "CrossVQADualAdapterModel",
     "FeatureQueue",

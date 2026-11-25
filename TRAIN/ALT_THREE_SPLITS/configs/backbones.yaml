@@ -1,33 +1,42 @@
-# Locked CrossVQA Backbone Priority & Colab Hardware Profiles
+# Locked CrossVQA Backbone Hierarchy & Colab Hardware Profiles
 # Order locked:
-#   1. Primary: Qwen/Qwen2-VL-2B
-#   2. Secondary 1 (Cross-Architecture 2B): HuggingFaceTB/SmolVLM-Base
-#   3. Secondary 2 (Fast Pilot / Scale Ablation): HuggingFaceTB/SmolVLM-500M-Base
+#   1. Primary (Full 3-Seed + Few-Shot + Ablations): HuggingFaceTB/SmolVLM-500M-Base
+#   2. Secondary 1 (Intra-Family 2B Scale Control): HuggingFaceTB/SmolVLM-Base
+#   3. Secondary 2 (Cross-Architecture & Saturation Anchor): Qwen/Qwen2-VL-2B
 
 backbones:
-  qwen2_vl_2b:
-    repo_id: "Qwen/Qwen2-VL-2B"
-    model_type: "qwen2_vl"
+  smolvlm_500m:
+    repo_id: "HuggingFaceTB/SmolVLM-500M-Base"
+    model_type: "smolvlm"
     priority: "primary"
-    skip_quant_modules: ["visual", "merger"]
+    role: "primary_full_matrix"
+    allow_4bit: false
+    skip_quant_modules: ["vision_model", "connector"]
+    exclude_lora_modules: ["vision_model", "visual"]
     target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-    supports_dynamic_pixels: true
+    supports_dynamic_pixels: false
 
   smolvlm_base:
     repo_id: "HuggingFaceTB/SmolVLM-Base"
     model_type: "smolvlm"
-    priority: "secondary_1"
+    priority: "secondary_1_scale"
+    role: "scale_control_2b"
+    allow_4bit: true
     skip_quant_modules: ["vision_model", "connector"]
+    exclude_lora_modules: ["vision_model", "visual"]
     target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
     supports_dynamic_pixels: false
 
-  smolvlm_500m:
-    repo_id: "HuggingFaceTB/SmolVLM-500M-Base"
-    model_type: "smolvlm"
-    priority: "secondary_2_pilot"
-    skip_quant_modules: ["vision_model", "connector"]
+  qwen2_vl_2b:
+    repo_id: "Qwen/Qwen2-VL-2B"
+    model_type: "qwen2_vl"
+    priority: "secondary_2_cross_arch"
+    role: "cross_arch_saturation_anchor"
+    allow_4bit: true
+    skip_quant_modules: ["visual", "merger"]
+    exclude_lora_modules: ["vision_model", "visual"]
     target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-    supports_dynamic_pixels: false
+    supports_dynamic_pixels: true
 
 hardware_profiles:
   preferred_order: ["l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"]
@@ -40,6 +49,7 @@ hardware_profiles:
     eval_batch_size: 8
     min_pixels: 200704
     max_pixels: 1310720
+    smolvlm_longest_edge: 2048
     optim: "paged_adamw_8bit"
   a100_40gb:
     dtype: "bf16"
@@ -50,6 +60,7 @@ hardware_profiles:
     eval_batch_size: 16
     min_pixels: 200704
     max_pixels: 1572864
+    smolvlm_longest_edge: 2048
     optim: "paged_adamw_8bit"
   g4_96gb:
     dtype: "bf16"
@@ -60,6 +71,7 @@ hardware_profiles:
     eval_batch_size: 32
     min_pixels: 200704
     max_pixels: 2097152
+    smolvlm_longest_edge: 2048
     optim: "adamw"
   t4_16gb:
     dtype: "fp16"
@@ -70,4 +82,5 @@ hardware_profiles:
     eval_batch_size: 4
     min_pixels: 200704
     max_pixels: 1048576
+    smolvlm_longest_edge: 1536
     optim: "paged_adamw_8bit"
