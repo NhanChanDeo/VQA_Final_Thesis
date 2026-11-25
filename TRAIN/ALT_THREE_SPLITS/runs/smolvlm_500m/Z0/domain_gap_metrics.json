@@ -1,0 +1,9 @@
+{
+  "n_doc": 794,
+  "n_scene": 794,
+  "dedup_by_image_id": true,
+  "rkhs_mmd": 0.918568,
+  "error_rate": 0.001893,
+  "accuracy": 0.998107,
+  "proxy_a_distance": 1.992429
+}
