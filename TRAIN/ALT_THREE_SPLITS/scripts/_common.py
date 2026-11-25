@@ -13,6 +13,14 @@ import numpy as np
 import torch
 import yaml
 
+os.environ.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
+os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+
+if torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8:
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
 
 def ensure_repo_root() -> Path:
     """Finds repository root containing TRAIN/src and ensures it is on sys.path."""
