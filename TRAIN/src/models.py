@@ -86,6 +86,27 @@ def _build_lora_config(
     return LoraConfig(**kwargs)
 
 
+def _disable_incompatible_peft_torchao() -> None:
+    """Prevents PEFT from crashing when an older system torchao (e.g. Colab 0.10.0) is installed."""
+    try:
+        import peft.import_utils as peft_import_utils
+
+        peft_import_utils.is_torchao_available()
+    except ImportError:
+        import peft.import_utils as peft_import_utils
+
+        peft_import_utils.is_torchao_available = lambda: False
+        try:
+            import peft.tuners.lora.torchao as peft_lora_torchao
+
+            peft_lora_torchao.is_torchao_available = lambda: False
+        except Exception:
+            pass
+        print("Warning: Incompatible torchao version detected for PEFT; disabled PEFT torchao dispatch.")
+    except Exception:
+        pass
+
+
 def build_vlm_model_and_processor(
     model_name_or_key: str = "smolvlm_500m",
     load_in_4bit: bool = True,
@@ -181,6 +202,7 @@ def build_vlm_model_and_processor(
         return model, processor
 
     if mode == "dual_lora":
+        _disable_incompatible_peft_torchao()
         from .adapters import CrossVQADualAdapterModel
 
         dual_model = CrossVQADualAdapterModel(
@@ -198,6 +220,7 @@ def build_vlm_model_and_processor(
         return dual_model, processor
 
     if mode == "standard_lora":
+        _disable_incompatible_peft_torchao()
         from peft import PeftModel, get_peft_model
 
         if adapter_checkpoint is not None:
