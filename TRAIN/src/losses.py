@@ -6,7 +6,7 @@ Proposed CrossVQA M2 Alignment Losses & Phase A9 Domain Discrepancy Metrics:
 - compute_rkhs_mmd & compute_proxy_a_distance: Phase A9 evaluation metrics
 """
 
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
@@ -185,11 +185,13 @@ def compute_rkhs_mmd(
     doc_embs: np.ndarray,
     scene_embs: np.ndarray,
     sigmas: Tuple[float, ...] = (0.5, 1.0, 2.0, 4.0, 8.0),
+    device: Optional[str] = None,
 ) -> float:
     """Computes normalized multi-kernel RBF MMD between NumPy embedding matrices (Phase A9)."""
-    with torch.no_grad():
-        x = F.normalize(torch.as_tensor(doc_embs, dtype=torch.float32), dim=-1)
-        y = F.normalize(torch.as_tensor(scene_embs, dtype=torch.float32), dim=-1)
+    target_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    with torch.inference_mode():
+        x = F.normalize(torch.as_tensor(doc_embs, dtype=torch.float32, device=target_device), dim=-1)
+        y = F.normalize(torch.as_tensor(scene_embs, dtype=torch.float32, device=target_device), dim=-1)
         return float(_mmd_from_tensors(x, y, sigmas=sigmas).item())
 
 

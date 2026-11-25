@@ -40,6 +40,7 @@ from TRAIN.src import (
     compute_transfer_gain,
     compute_vqa_accuracy,
     resolve_hardware_profile,
+    run_evaluation,
     save_run_card,
 )
 
@@ -495,3 +496,67 @@ def test_generated_colab_notebooks_valid_and_secret_free():
         assert "getpass" in raw
         nb = json.loads(raw)
         assert nb["nbformat"] == 4 and len(nb["cells"]) >= 5
+
+
+def test_z0_tier1_resolution_bucketing_order_preservation_and_early_exit():
+    model = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    proc = _DummyProcessor(with_chat_template=False)
+
+    # Deliberately unordered resolutions: 64x64, 16x16, 48x48, 32x32
+    eval_samples = [
+        {"sample_id": "s0", "domain_type": "document_text", "image": Image.new("RGB", (64, 64)), "question": "q0?", "answers": ["ans"]},
+        {"sample_id": "s1", "domain_type": "scene_text", "image": Image.new("RGB", (16, 16)), "question": "q1?", "answers": ["ans"]},
+        {"sample_id": "s2", "domain_type": "document_text", "image": Image.new("RGB", (48, 48)), "question": "q2?", "answers": ["ans"]},
+        {"sample_id": "s3", "domain_type": "scene_text", "image": Image.new("RGB", (32, 32)), "question": "q3?", "answers": ["ans"]},
+    ]
+
+    observed_batches = []
+
+    def _on_batch(meta_list, _model_inputs):
+        observed_batches.append([m["sample_id"] for m in meta_list])
+
+    metrics, details = run_evaluation(
+        model=model,
+        processor=proc,
+        eval_dataset=eval_samples,
+        device="cpu",
+        max_new_tokens=2,
+        eval_batch_size=2,
+        return_details=True,
+        bucket_by_resolution=True,
+        on_batch_evaluated=_on_batch,
+    )
+    assert "anls" in metrics and "vqa_accuracy" in metrics
+    # Bucketing groups small images (s1: 16x16, s3: 32x32) and large images (s2: 48x48, s0: 64x64)
+    assert observed_batches == [["s1", "s3"], ["s2", "s0"]]
+    # Returned details must be restored to original order
+    assert [d["sample_id"] for d in details] == ["s0", "s1", "s2", "s3"]
+
+    # Verify extract_domain_embeddings exits after projector hook without executing LLM q_proj
+    sys.path.insert(0, str(REPO_ROOT / "TRAIN/ALT_THREE_SPLITS/scripts"))
+    from run_z0_domain_gap import extract_domain_embeddings
+
+    llm_calls = {"count": 0}
+    h = model.q_proj.register_forward_hook(lambda *_args: llm_calls.__setitem__("count", llm_calls["count"] + 1))
+    try:
+        embs = extract_domain_embeddings(
+            model=model,
+            processor=proc,
+            model_type="smolvlm",
+            dataset_name="docvqa",
+            split="validation",
+            max_samples=3,
+            batch_size=2,
+            device="cpu",
+            eval_dataset=eval_samples,
+        )
+    finally:
+        h.remove()
+
+    assert llm_calls["count"] == 0
+    assert embs.shape == (3, 16)
+    norms = np.linalg.norm(embs, axis=1)
+    assert np.allclose(norms, 1.0, atol=1e-5)
+
+    # Verify CPU compute_rkhs_mmd still produces finite non-negative output
+    assert compute_rkhs_mmd(embs, embs, device="cpu") == pytest.approx(0.0, abs=1e-6)

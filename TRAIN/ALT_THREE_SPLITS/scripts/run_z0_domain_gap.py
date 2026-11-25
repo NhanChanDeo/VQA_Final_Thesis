@@ -11,11 +11,13 @@ Usage:
 
 import argparse
 import json
+import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import numpy as np
 import polars as pl
 import torch
+from torch.utils.data import DataLoader, IterableDataset
 
 from _common import (
     ensure_repo_root,
@@ -24,6 +26,27 @@ from _common import (
     load_yaml,
     set_seed,
 )
+
+
+class _ProjectorCaptured(Exception):
+    """Sentinel raised inside the projector hook to skip downstream LLM layers."""
+
+
+def _resolve_z0_eval_batch_size(hw: Dict[str, Any], load_in_4bit: bool, requested: Optional[int]) -> int:
+    if requested is not None:
+        return max(int(requested), 1)
+    base_bs = int(hw["eval_batch_size"])
+    if not load_in_4bit and hw.get("name") in ("l4_24gb", "a100_40gb", "g4_96gb"):
+        return base_bs * 2
+    return base_bs
+
+
+def _resolve_num_workers(requested: Optional[int], local_data_dir: Optional[str]) -> int:
+    if requested is not None:
+        return max(int(requested), 0)
+    if local_data_dir and torch.cuda.is_available() and sys.platform != "win32":
+        return 4
+    return 0
 
 
 def extract_domain_embeddings(
@@ -36,54 +59,101 @@ def extract_domain_embeddings(
     batch_size: int,
     device: str,
     local_data_dir: Optional[str] = None,
+    num_workers: int = 0,
+    eval_dataset: Optional[Any] = None,
 ) -> np.ndarray:
-    """Extracts L2-normalized pooled visual projector embeddings using a forward hook."""
+    """
+    Extracts L2-normalized pooled visual projector embeddings using an early-exit
+    forward hook so the downstream LLM layers are skipped entirely.
+    """
     from TRAIN.src.adapters import _pool_visual_tokens, _resolve_projector_module
     from TRAIN.src.collator import CrossVQADataCollator
     from TRAIN.src.dataset import load_crossvqa_dataset
     from TRAIN.src.trainer import _prepare_model_inputs
 
     _, proj_mod = _resolve_projector_module(model)
-    captured = {}
+    captured: Dict[str, torch.Tensor] = {}
 
     def _hook(mod, inp, out):
-        captured["vis"] = out
+        vis_t = out[0] if isinstance(out, (tuple, list)) else out
+        captured["vis"] = vis_t.detach()
+        raise _ProjectorCaptured()
 
     handle = proj_mod.register_forward_hook(_hook)
     collator = CrossVQADataCollator(processor, model_type=model_type, include_ocr=False, is_train=False)
-    ds = load_crossvqa_dataset(
-        dataset_name=dataset_name,
-        split=split,
-        split_regime="alt_three_splits",
-        streaming=True,
-        local_data_dir=local_data_dir,
-    )
+    use_streaming = local_data_dir is None
+    if eval_dataset is not None:
+        ds = eval_dataset
+    else:
+        ds = load_crossvqa_dataset(
+            dataset_name=dataset_name,
+            split=split,
+            split_regime="alt_three_splits",
+            streaming=use_streaming,
+            local_data_dir=local_data_dir,
+        )
 
     embs: List[np.ndarray] = []
-    buf = []
-    count = 0
     model.eval()
     from tqdm.auto import tqdm
 
+    def _process_batch(batch: Dict[str, Any], cur_bs: int) -> None:
+        captured.clear()
+        inputs = _prepare_model_inputs(batch, device)
+        with torch.inference_mode():
+            try:
+                _ = model(**inputs)
+            except _ProjectorCaptured:
+                pass
+        if "vis" not in captured:
+            raise RuntimeError("Projector hook did not capture visual features before forward completion.")
+        pooled = _pool_visual_tokens(
+            captured.pop("vis"),
+            batch_size=cur_bs,
+            image_grid_thw=inputs.get("image_grid_thw"),
+        )
+        pooled_norm = torch.nn.functional.normalize(pooled.float(), dim=-1)
+        embs.append(pooled_norm.cpu().numpy())
+
+    is_map_style = (
+        hasattr(ds, "__len__")
+        and hasattr(ds, "__getitem__")
+        and not isinstance(ds, IterableDataset)
+    )
+    bs = max(int(batch_size), 1)
+
     try:
-        for sample in tqdm(ds, desc=f"Extracting {dataset_name} embeddings", total=max_samples):
-            if count >= max_samples:
-                break
-            buf.append(sample)
-            count += 1
-            if len(buf) >= batch_size or count >= max_samples:
-                batch = collator(buf)
-                inputs = _prepare_model_inputs(batch, device)
-                with torch.no_grad():
-                    _ = model(**inputs)
-                pooled = _pool_visual_tokens(
-                    captured["vis"],
-                    batch_size=len(buf),
-                    image_grid_thw=inputs.get("image_grid_thw"),
-                )
-                pooled_norm = torch.nn.functional.normalize(pooled.float(), dim=-1)
-                embs.append(pooled_norm.cpu().numpy())
-                buf = []
+        if is_map_style:
+            target_n = min(len(ds), max_samples)
+            if hasattr(ds, "select"):
+                ds = ds.select(range(target_n))
+            else:
+                ds = ds[:target_n]
+            eff_workers = 0 if isinstance(ds, (list, tuple)) else max(int(num_workers), 0)
+            dl_kwargs: Dict[str, Any] = {
+                "batch_size": bs,
+                "shuffle": False,
+                "num_workers": eff_workers,
+                "collate_fn": collator,
+                "pin_memory": isinstance(device, str) and device.startswith("cuda"),
+            }
+            if eff_workers > 0:
+                dl_kwargs["prefetch_factor"] = 2
+            loader = DataLoader(ds, **dl_kwargs)
+            for batch in tqdm(loader, desc=f"Extracting {dataset_name} embeddings", total=len(loader)):
+                _process_batch(batch, int(batch["input_ids"].shape[0]))
+        else:
+            buf = []
+            count = 0
+            for sample in tqdm(ds, desc=f"Extracting {dataset_name} embeddings", total=max_samples):
+                if count >= max_samples:
+                    break
+                buf.append(sample)
+                count += 1
+                if len(buf) >= bs or count >= max_samples:
+                    batch = collator(buf)
+                    _process_batch(batch, len(buf))
+                    buf = []
     finally:
         handle.remove()
 
@@ -146,6 +216,10 @@ def main() -> None:
     parser.add_argument("--local_data_dir", default=None)
     parser.add_argument("--include_ocr", action="store_true")
     parser.add_argument("--skip_domain_gap", action="store_true")
+    parser.add_argument("--load_in_4bit", action="store_true", help="Force 4-bit quantization for Z0 (off by default for faster pure-bf16/fp16 inference)")
+    parser.add_argument("--eval_batch_size", type=int, default=None)
+    parser.add_argument("--num_workers", type=int, default=None)
+    parser.add_argument("--no_bucket_by_resolution", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -160,10 +234,15 @@ def main() -> None:
     run_dir = Path(base_cfg["runs_root"]) / args.model / f"Z0{suffix}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    load_in_4bit = bool(args.load_in_4bit)
+    eval_batch_size = _resolve_z0_eval_batch_size(hw, load_in_4bit=load_in_4bit, requested=args.eval_batch_size)
+    num_workers = _resolve_num_workers(args.num_workers, args.local_data_dir)
+    bucket_by_resolution = not args.no_bucket_by_resolution
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, processor = build_vlm_model_and_processor(
         model_name_or_key=args.model,
-        load_in_4bit=bool(hw.get("load_in_4bit", base_cfg["training"]["load_in_4bit"])),
+        load_in_4bit=load_in_4bit,
         use_lora=False,
         architecture_mode="none",
         min_pixels=hw["min_pixels"],
@@ -173,8 +252,10 @@ def main() -> None:
     )
 
     all_results = {"splits": {}, "domain_gap": {}}
+    val_embeddings: Dict[str, np.ndarray] = {}
     for sp in args.eval_splits:
-        print(f"\n=== Running Z0 Zero-Shot Evaluation on '{sp}' ===")
+        print(f"\n=== Running Z0 Zero-Shot Evaluation on '{sp}' (bs={eval_batch_size}, 4bit={load_in_4bit}, workers={num_workers}, bucket={bucket_by_resolution}) ===")
+        collect_here = (sp == "validation") and (not args.skip_domain_gap) and (not args.include_ocr)
         res = evaluate_both_domains(
             model=model,
             processor=processor,
@@ -184,24 +265,43 @@ def main() -> None:
             device=device,
             include_ocr=args.include_ocr,
             max_new_tokens=base_cfg["training"]["max_new_tokens"],
-            eval_batch_size=hw["eval_batch_size"],
+            eval_batch_size=eval_batch_size,
             max_eval_samples=args.max_eval_samples,
             local_data_dir=args.local_data_dir,
+            num_workers=num_workers,
+            bucket_by_resolution=bucket_by_resolution,
+            embedding_out=val_embeddings if collect_here else None,
+            domain_gap_samples=args.domain_gap_samples if collect_here else 0,
         )
         all_results["splits"][sp] = res
 
+    fused_stage_b = False
     if not args.skip_domain_gap:
-        print(f"\n=== Computing Phase A8 UMAP & A9 MMD / Proxy A-distance (N={args.domain_gap_samples}/domain) ===")
-        doc_embs = extract_domain_embeddings(
-            model, processor, model_type, "docvqa", "validation",
-            args.domain_gap_samples, hw["eval_batch_size"], device, args.local_data_dir
+        can_reuse_val = (
+            "validation" in args.eval_splits
+            and not args.include_ocr
+            and "docvqa" in val_embeddings
+            and "textvqa" in val_embeddings
+            and (args.max_eval_samples is None or args.max_eval_samples >= args.domain_gap_samples)
         )
-        scene_embs = extract_domain_embeddings(
-            model, processor, model_type, "textvqa", "validation",
-            args.domain_gap_samples, hw["eval_batch_size"], device, args.local_data_dir
-        )
+        if can_reuse_val:
+            fused_stage_b = True
+            doc_embs = val_embeddings["docvqa"]
+            scene_embs = val_embeddings["textvqa"]
+            print(f"\n=== Phase A8/A9: Reusing {len(doc_embs)} DocVQA + {len(scene_embs)} TextVQA visual embeddings captured during validation pass ===")
+        else:
+            print(f"\n=== Computing Phase A8 UMAP & A9 MMD / Proxy A-distance (N={args.domain_gap_samples}/domain, early-exit LLM skip) ===")
+            doc_embs = extract_domain_embeddings(
+                model, processor, model_type, "docvqa", "validation",
+                args.domain_gap_samples, eval_batch_size, device, args.local_data_dir, num_workers=num_workers,
+            )
+            scene_embs = extract_domain_embeddings(
+                model, processor, model_type, "textvqa", "validation",
+                args.domain_gap_samples, eval_batch_size, device, args.local_data_dir, num_workers=num_workers,
+            )
+
         if len(doc_embs) >= 10 and len(scene_embs) >= 10:
-            mmd_val = compute_rkhs_mmd(doc_embs, scene_embs)
+            mmd_val = compute_rkhs_mmd(doc_embs, scene_embs, device=device)
             pad_stats = compute_proxy_a_distance(doc_embs, scene_embs, n_splits=5, seed=args.seed)
             run_umap_and_plot(doc_embs, scene_embs, run_dir, args.model)
             all_results["domain_gap"] = {
@@ -217,8 +317,14 @@ def main() -> None:
     card_cfg = {
         "experiment": {"id": f"Z0_{args.model}{suffix}", "exp": "Z0", "seed": args.seed, "git_sha": get_git_sha()},
         "data": {"regime": "alt_three_splits", "revision": "three-splits", "include_ocr": args.include_ocr},
-        "model": {"backbone": model_info["repo_id"], "architecture_mode": "frozen_zero_shot"},
-        "training": {"hardware_profile": hw["name"]},
+        "model": {"backbone": model_info["repo_id"], "architecture_mode": "frozen_zero_shot", "load_in_4bit": load_in_4bit},
+        "training": {
+            "hardware_profile": hw["name"],
+            "eval_batch_size": eval_batch_size,
+            "num_workers": num_workers,
+            "bucket_by_resolution": bucket_by_resolution,
+            "fused_stage_b": fused_stage_b,
+        },
     }
     save_run_card(str(run_dir), card_cfg, all_results)
     print(f"\nSaved Z0 + Domain Gap artifacts to {run_dir}")

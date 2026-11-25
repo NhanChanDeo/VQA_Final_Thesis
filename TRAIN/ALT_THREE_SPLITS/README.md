@@ -17,6 +17,9 @@
 
 ```bash
 # 1. Zero-shot Z0 + Phase A8 UMAP + Phase A9 MMD/Proxy A-distance
+#    Defaults to pure bf16/fp16 (no 4-bit overhead), Stage A/B validation embedding fusion,
+#    local Arrow multi-worker prefetch, resolution bucketing, and GPU RKHS MMD.
+#    Optional overrides: --load_in_4bit, --eval_batch_size N, --num_workers N, --no_bucket_by_resolution
 python TRAIN/ALT_THREE_SPLITS/scripts/run_z0_domain_gap.py --model qwen2_vl_2b
 
 # 2. Baselines B1–B5 (OCR-free Track A default; pass --include_ocr for Track B ablation)

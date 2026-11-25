@@ -3,15 +3,17 @@ Standardized training, checkpoint resilience, hardware profiling, and evaluation
 utilities for CrossVQA baselines (Z0, B1–B5) and proposed methods (M1–M3).
 """
 
+import io
 import json
 import math
 import shutil
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from PIL import Image
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset, IterableDataset
 from tqdm.auto import tqdm
 from transformers import get_cosine_schedule_with_warmup
 
@@ -322,6 +324,93 @@ def train_epoch(
     return total_loss / max(optimizer_steps, 1)
 
 
+class _IndexedEvalDataset(Dataset):
+    """Map-style dataset wrapper that tracks original sample indices across resolution bucketing."""
+
+    def __init__(self, dataset: Any, indices: List[int]) -> None:
+        self.dataset = dataset
+        self.indices = indices
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, idx: int) -> Tuple[int, Dict[str, Any]]:
+        orig_idx = self.indices[idx]
+        return orig_idx, self.dataset[orig_idx]
+
+
+class _EvalCollateWrapper:
+    """Picklable DataLoader collate wrapper returning model tensor batch plus lightweight metadata."""
+
+    def __init__(self, collator: CrossVQADataCollator) -> None:
+        self.collator = collator
+
+    def __call__(self, items: List[Tuple[int, Dict[str, Any]]]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        samples = [sample for _, sample in items]
+        batch = self.collator(samples)
+        meta = [
+            {
+                "_orig_idx": orig_idx,
+                "sample_id": sample.get("sample_id", ""),
+                "domain_type": sample.get("domain_type", ""),
+                "question": sample.get("question", ""),
+                "answers": sample.get("answers") or [sample.get("canonical_answer", "")],
+            }
+            for orig_idx, sample in items
+        ]
+        return batch, meta
+
+
+def _image_size_from_payload(payload: Any) -> int:
+    if isinstance(payload, Image.Image):
+        return int(payload.width) * int(payload.height)
+    if isinstance(payload, dict):
+        if payload.get("bytes") is not None:
+            with Image.open(io.BytesIO(payload["bytes"])) as im:
+                return int(im.width) * int(im.height)
+        if payload.get("path"):
+            with Image.open(payload["path"]) as im:
+                return int(im.width) * int(im.height)
+    if isinstance(payload, bytes):
+        with Image.open(io.BytesIO(payload)) as im:
+            return int(im.width) * int(im.height)
+    return 0
+
+
+def _bucket_indices_by_resolution(dataset: Any, count: int) -> List[int]:
+    """
+    Returns dataset indices [0..count-1] sorted by image pixel area (ascending)
+    using metadata columns or lazy image header parsing (no full pixel decode).
+    """
+    indices = list(range(count))
+    if count <= 1:
+        return indices
+    try:
+        col_names = list(getattr(dataset, "column_names", []) or [])
+        for w_col, h_col in (("image_width", "image_height"), ("width", "height")):
+            if w_col in col_names and h_col in col_names:
+                sub = dataset.select(indices) if hasattr(dataset, "select") else dataset
+                widths = sub[w_col][:count]
+                heights = sub[h_col][:count]
+                areas = [int(w) * int(h) for w, h in zip(widths, heights)]
+                return sorted(indices, key=lambda i: areas[i])
+
+        if hasattr(dataset, "cast_column") and "image" in getattr(dataset, "features", {}):
+            from datasets import Image as HFImage
+
+            raw_ds = dataset.select(indices) if hasattr(dataset, "select") else dataset
+            raw_ds = raw_ds.cast_column("image", HFImage(decode=False))
+            areas = [_image_size_from_payload(p) for p in raw_ds["image"]]
+            return sorted(indices, key=lambda i: areas[i])
+
+        if isinstance(dataset, (list, tuple)):
+            areas = [_image_size_from_payload(dataset[i].get("image")) for i in indices]
+            return sorted(indices, key=lambda i: areas[i])
+    except Exception:
+        pass
+    return indices
+
+
 def run_evaluation(
     model,
     processor,
@@ -336,9 +425,14 @@ def run_evaluation(
     eval_batch_size: int = 4,
     collator: Optional[CrossVQADataCollator] = None,
     return_details: bool = False,
+    num_workers: int = 0,
+    bucket_by_resolution: bool = True,
+    on_batch_evaluated: Optional[Callable[[List[Dict[str, Any]], Dict[str, Any]], None]] = None,
 ) -> Tuple[Dict[str, float], List[Any]]:
     """
     Evaluates batched greedy autoregressive generation against ground-truth answers.
+    Uses DataLoader prefetching, resolution bucketing, and torch.inference_mode() when
+    given a map-style dataset while preserving original sample ordering.
     """
     model.eval()
     if collator is None:
@@ -353,54 +447,95 @@ def run_evaluation(
     predictions: List[str] = []
     ground_truths: List[List[str]] = []
     details: List[Dict[str, Any]] = []
+    orig_order: List[int] = []
+    tokenizer = getattr(processor, "tokenizer", processor)
 
-    sample_buffer: List[Dict[str, Any]] = []
-    count = 0
-
-    def _eval_chunk(chunk: List[Dict[str, Any]]) -> None:
-        batch = collator(chunk)
+    def _run_batch(batch: Dict[str, Any], meta_list: List[Dict[str, Any]]) -> None:
         model_inputs = _prepare_model_inputs(batch, device)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             generated_ids = model.generate(
                 **model_inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
             )
 
+        if on_batch_evaluated is not None:
+            on_batch_evaluated(meta_list, model_inputs)
+
         input_len = model_inputs["input_ids"].shape[1]
-        tokenizer = getattr(processor, "tokenizer", processor)
         gen_tokens = generated_ids[:, input_len:]
         decoded_batch = tokenizer.batch_decode(gen_tokens, skip_special_tokens=True)
 
-        for sample, pred_raw in zip(chunk, decoded_batch):
+        for meta, pred_raw in zip(meta_list, decoded_batch):
             pred_text = pred_raw.strip()
-            gt_list = sample.get("answers") or [sample.get("canonical_answer", "")]
+            gt_list = meta["answers"]
+            orig_order.append(meta["_orig_idx"])
             predictions.append(pred_text)
             ground_truths.append(gt_list)
             if return_details:
                 details.append(
                     {
-                        "sample_id": sample.get("sample_id", ""),
-                        "domain_type": sample.get("domain_type", ""),
-                        "question": sample.get("question", ""),
+                        "sample_id": meta["sample_id"],
+                        "domain_type": meta["domain_type"],
+                        "question": meta["question"],
                         "prediction": pred_text,
                         "answers": gt_list,
                     }
                 )
 
-    pbar = tqdm(eval_dataset, desc="Evaluating", total=max_eval_samples)
-    for sample in pbar:
-        if max_eval_samples is not None and count >= max_eval_samples:
-            break
-        sample_buffer.append(sample)
-        count += 1
-        if len(sample_buffer) >= max(eval_batch_size, 1):
-            _eval_chunk(sample_buffer)
-            sample_buffer = []
+    is_map_style = (
+        hasattr(eval_dataset, "__len__")
+        and hasattr(eval_dataset, "__getitem__")
+        and not isinstance(eval_dataset, IterableDataset)
+    )
+    bs = max(eval_batch_size, 1)
 
-    if sample_buffer:
-        _eval_chunk(sample_buffer)
+    if is_map_style:
+        total_avail = len(eval_dataset)
+        eval_count = min(total_avail, max_eval_samples) if max_eval_samples is not None else total_avail
+        indices = _bucket_indices_by_resolution(eval_dataset, eval_count) if bucket_by_resolution else list(range(eval_count))
+        wrapped_ds = _IndexedEvalDataset(eval_dataset, indices)
+        eff_workers = 0 if isinstance(eval_dataset, (list, tuple)) else max(int(num_workers), 0)
+        dl_kwargs: Dict[str, Any] = {
+            "batch_size": bs,
+            "shuffle": False,
+            "num_workers": eff_workers,
+            "collate_fn": _EvalCollateWrapper(collator),
+            "pin_memory": isinstance(device, str) and device.startswith("cuda"),
+        }
+        if eff_workers > 0:
+            dl_kwargs["prefetch_factor"] = 2
+            dl_kwargs["persistent_workers"] = False
+
+        loader = DataLoader(wrapped_ds, **dl_kwargs)
+        for batch, meta_list in tqdm(loader, desc="Evaluating", total=len(loader)):
+            _run_batch(batch, meta_list)
+
+        if bucket_by_resolution and len(orig_order) > 1:
+            restore_perm = sorted(range(len(orig_order)), key=lambda i: orig_order[i])
+            predictions = [predictions[i] for i in restore_perm]
+            ground_truths = [ground_truths[i] for i in restore_perm]
+            if return_details:
+                details = [details[i] for i in restore_perm]
+    else:
+        sample_buffer: List[Tuple[int, Dict[str, Any]]] = []
+        count = 0
+        collate_wrapper = _EvalCollateWrapper(collator)
+        pbar = tqdm(eval_dataset, desc="Evaluating", total=max_eval_samples)
+        for sample in pbar:
+            if max_eval_samples is not None and count >= max_eval_samples:
+                break
+            sample_buffer.append((count, sample))
+            count += 1
+            if len(sample_buffer) >= bs:
+                batch, meta_list = collate_wrapper(sample_buffer)
+                _run_batch(batch, meta_list)
+                sample_buffer = []
+
+        if sample_buffer:
+            batch, meta_list = collate_wrapper(sample_buffer)
+            _run_batch(batch, meta_list)
 
     metrics = evaluate_predictions(predictions, ground_truths, metric_type=metric_type)
     if return_details:
