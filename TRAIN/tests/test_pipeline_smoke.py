@@ -1189,3 +1189,20 @@ def test_hf_namespace_isolation_paths():
     )
     assert fs_hf == "alt_three_splits/ebs64/smolvlm_500m/few_shot/M2_pct_05/seed_42"
     assert fs_rel.as_posix().endswith("TRAIN/ALT_THREE_SPLITS/runs/smolvlm_500m/ebs64/few_shot/M2_pct_05/seed_42")
+
+
+def test_temporary_use_cache_restores_nested_configs():
+    from types import SimpleNamespace
+    from TRAIN.src.trainer import _temporary_use_cache
+
+    text_cfg = SimpleNamespace(use_cache=False)
+    top_cfg = SimpleNamespace(use_cache=False, text_config=text_cfg)
+    backbone = SimpleNamespace(config=top_cfg)
+    wrapper = SimpleNamespace(backbone=backbone, config=top_cfg)
+
+    with _temporary_use_cache(wrapper, True):
+        assert top_cfg.use_cache is True
+        assert text_cfg.use_cache is True
+
+    assert top_cfg.use_cache is False
+    assert text_cfg.use_cache is False

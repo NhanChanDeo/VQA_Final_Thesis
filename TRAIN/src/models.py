@@ -188,6 +188,15 @@ def build_vlm_model_and_processor(
     # 4. Activation Checkpointing & k-bit preparation
     if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
         model.gradient_checkpointing_enable()
+        cfg = getattr(model, "config", None)
+        if cfg is not None:
+            if hasattr(cfg, "use_cache"):
+                cfg.use_cache = False
+            text_cfg = getattr(cfg, "text_config", None)
+            if text_cfg is not None and hasattr(text_cfg, "use_cache"):
+                text_cfg.use_cache = False
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
         if effective_4bit:
             from peft import prepare_model_for_kbit_training
 

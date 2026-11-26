@@ -440,6 +440,41 @@ def _bucket_indices_by_resolution(dataset: Any, count: int) -> List[int]:
     return indices
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def _temporary_use_cache(model: Any, enabled: bool):
+    """Temporarily sets `use_cache` on model/backbone configs (including `text_config`) and restores prior values."""
+    saved: List[Tuple[Any, bool]] = []
+    seen_ids = set()
+
+    def _visit_cfg(cfg: Any) -> None:
+        if cfg is None or id(cfg) in seen_ids:
+            return
+        seen_ids.add(id(cfg))
+        if hasattr(cfg, "use_cache"):
+            saved.append((cfg, bool(cfg.use_cache)))
+            cfg.use_cache = enabled
+        _visit_cfg(getattr(cfg, "text_config", None))
+
+    candidates = [model, getattr(model, "backbone", None), getattr(model, "base_model", None)]
+    if hasattr(model, "get_base_model"):
+        try:
+            candidates.append(model.get_base_model())
+        except Exception:
+            pass
+    for obj in candidates:
+        if obj is not None:
+            _visit_cfg(getattr(obj, "config", None))
+
+    try:
+        yield
+    finally:
+        for cfg, prev in saved:
+            cfg.use_cache = prev
+
+
 def run_evaluation(
     model,
     processor,
@@ -520,51 +555,52 @@ def run_evaluation(
     )
     bs = max(eval_batch_size, 1)
 
-    if is_map_style:
-        total_avail = len(eval_dataset)
-        eval_count = min(total_avail, max_eval_samples) if max_eval_samples is not None else total_avail
-        indices = _bucket_indices_by_resolution(eval_dataset, eval_count) if bucket_by_resolution else list(range(eval_count))
-        wrapped_ds = _IndexedEvalDataset(eval_dataset, indices)
-        eff_workers = 0 if isinstance(eval_dataset, (list, tuple)) else max(int(num_workers), 0)
-        dl_kwargs: Dict[str, Any] = {
-            "batch_size": bs,
-            "shuffle": False,
-            "num_workers": eff_workers,
-            "collate_fn": _EvalCollateWrapper(collator),
-            "pin_memory": isinstance(device, str) and device.startswith("cuda"),
-        }
-        if eff_workers > 0:
-            dl_kwargs["prefetch_factor"] = 2
-            dl_kwargs["persistent_workers"] = False
+    with _temporary_use_cache(model, True):
+        if is_map_style:
+            total_avail = len(eval_dataset)
+            eval_count = min(total_avail, max_eval_samples) if max_eval_samples is not None else total_avail
+            indices = _bucket_indices_by_resolution(eval_dataset, eval_count) if bucket_by_resolution else list(range(eval_count))
+            wrapped_ds = _IndexedEvalDataset(eval_dataset, indices)
+            eff_workers = 0 if isinstance(eval_dataset, (list, tuple)) else max(int(num_workers), 0)
+            dl_kwargs: Dict[str, Any] = {
+                "batch_size": bs,
+                "shuffle": False,
+                "num_workers": eff_workers,
+                "collate_fn": _EvalCollateWrapper(collator),
+                "pin_memory": isinstance(device, str) and device.startswith("cuda"),
+            }
+            if eff_workers > 0:
+                dl_kwargs["prefetch_factor"] = 2
+                dl_kwargs["persistent_workers"] = False
 
-        loader = DataLoader(wrapped_ds, **dl_kwargs)
-        for batch, meta_list in tqdm(loader, desc="Evaluating", total=len(loader)):
-            _run_batch(batch, meta_list)
+            loader = DataLoader(wrapped_ds, **dl_kwargs)
+            for batch, meta_list in tqdm(loader, desc="Evaluating", total=len(loader)):
+                _run_batch(batch, meta_list)
 
-        if bucket_by_resolution and len(orig_order) > 1:
-            restore_perm = sorted(range(len(orig_order)), key=lambda i: orig_order[i])
-            predictions = [predictions[i] for i in restore_perm]
-            ground_truths = [ground_truths[i] for i in restore_perm]
-            if return_details:
-                details = [details[i] for i in restore_perm]
-    else:
-        sample_buffer: List[Tuple[int, Dict[str, Any]]] = []
-        count = 0
-        collate_wrapper = _EvalCollateWrapper(collator)
-        pbar = tqdm(eval_dataset, desc="Evaluating", total=max_eval_samples)
-        for sample in pbar:
-            if max_eval_samples is not None and count >= max_eval_samples:
-                break
-            sample_buffer.append((count, sample))
-            count += 1
-            if len(sample_buffer) >= bs:
+            if bucket_by_resolution and len(orig_order) > 1:
+                restore_perm = sorted(range(len(orig_order)), key=lambda i: orig_order[i])
+                predictions = [predictions[i] for i in restore_perm]
+                ground_truths = [ground_truths[i] for i in restore_perm]
+                if return_details:
+                    details = [details[i] for i in restore_perm]
+        else:
+            sample_buffer: List[Tuple[int, Dict[str, Any]]] = []
+            count = 0
+            collate_wrapper = _EvalCollateWrapper(collator)
+            pbar = tqdm(eval_dataset, desc="Evaluating", total=max_eval_samples)
+            for sample in pbar:
+                if max_eval_samples is not None and count >= max_eval_samples:
+                    break
+                sample_buffer.append((count, sample))
+                count += 1
+                if len(sample_buffer) >= bs:
+                    batch, meta_list = collate_wrapper(sample_buffer)
+                    _run_batch(batch, meta_list)
+                    sample_buffer = []
+
+            if sample_buffer:
                 batch, meta_list = collate_wrapper(sample_buffer)
                 _run_batch(batch, meta_list)
-                sample_buffer = []
-
-        if sample_buffer:
-            batch, meta_list = collate_wrapper(sample_buffer)
-            _run_batch(batch, meta_list)
 
     metrics = evaluate_predictions(predictions, ground_truths, metric_type=metric_type)
     if return_details:
