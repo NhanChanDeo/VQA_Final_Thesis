@@ -385,7 +385,7 @@ def test_metrics_hardware_checkpoint_and_trainer_e2e(tmp_path):
     hw_cpu = resolve_hardware_profile("auto")
     assert hw_cpu["name"] == "cpu"
     hw_l4 = resolve_hardware_profile("l4_24gb")
-    assert hw_l4["dtype"] == "bf16" and hw_l4["per_device_train_batch_size"] == 8 and hw_l4["gradient_accumulation_steps"] == 8
+    assert hw_l4["dtype"] == "bf16" and hw_l4["per_device_train_batch_size"] == 4 and hw_l4["gradient_accumulation_steps"] == 16
     hw_a100 = resolve_hardware_profile("a100_40gb")
     assert hw_a100["dtype"] == "bf16" and hw_a100["per_device_train_batch_size"] == 16 and hw_a100["gradient_accumulation_steps"] == 4
     hw_g4 = resolve_hardware_profile("g4_96gb")
