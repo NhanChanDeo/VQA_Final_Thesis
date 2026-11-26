@@ -8,8 +8,9 @@ runs_root: "TRAIN/ALT_THREE_SPLITS/runs"
 checkpoints:
   hf_repo_id: "gamusa/crossvqa-checkpoints"
   hf_private: true
+  checkpoint_namespace: "ebs64"
   gdrive_backup_root: "/content/drive/MyDrive/CrossVQA_Checkpoints/ALT_THREE_SPLITS"
-  save_every_steps: 250
+  save_every_steps: 64
 
 track_default:
   name: "track_a_ocr_free"
@@ -23,10 +24,11 @@ ocr_ablation_track_b:
 
 training:
   load_in_4bit: true
+  effective_batch_size: 64
   lora_r: 16
   lora_alpha: 32
   lora_dropout: 0.05
-  learning_rate: 2.0e-4
+  learning_rate: 4.0e-4
   weight_decay: 0.01
   warmup_ratio: 0.05
   epochs: 2

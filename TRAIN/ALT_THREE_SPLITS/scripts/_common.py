@@ -59,6 +59,66 @@ def resolve_hf_token(cli_token: Optional[str] = None) -> Optional[str]:
     return cli_token or os.environ.get("HF_TOKEN") or None
 
 
+def resolve_checkpoint_paths(
+    runs_root: str,
+    model: str,
+    exp_dir: str,
+    seed: int,
+    checkpoint_namespace: Optional[str] = None,
+    few_shot_pct: int = 100,
+    few_shot_tag: Optional[str] = None,
+) -> Tuple[Path, str]:
+    """Computes isolated local run directory and HF Hub / Drive subpath for a given namespace."""
+    ns = (checkpoint_namespace or "").strip().strip("/")
+    if int(few_shot_pct) < 100:
+        leaf = f"{few_shot_tag or exp_dir}_pct_{int(few_shot_pct):02d}/seed_{int(seed)}"
+        rel_parts = (model, ns, "few_shot", leaf) if ns else (model, "few_shot", leaf)
+        hf_subpath = (
+            f"alt_three_splits/{ns}/{model}/few_shot/{leaf}"
+            if ns
+            else f"alt_three_splits/{model}/few_shot/{leaf}"
+        )
+    else:
+        leaf = f"{exp_dir}/seed_{int(seed)}"
+        rel_parts = (model, ns, leaf) if ns else (model, leaf)
+        hf_subpath = (
+            f"alt_three_splits/{ns}/{model}/{leaf}"
+            if ns
+            else f"alt_three_splits/{model}/{leaf}"
+        )
+    run_rel = Path(runs_root).joinpath(*rel_parts)
+    return run_rel, hf_subpath
+
+
+def apply_training_overrides(
+    hw: Dict[str, Any],
+    tr_cfg: Dict[str, Any],
+    args: Any,
+) -> Tuple[int, int, int, float]:
+    """Resolves per-device batch size, grad accum, eval batch size, and LR with optional CLI overrides."""
+    batch_size = (
+        int(args.batch_size)
+        if getattr(args, "batch_size", None) is not None
+        else int(hw["per_device_train_batch_size"])
+    )
+    grad_accum = (
+        int(args.gradient_accumulation_steps)
+        if getattr(args, "gradient_accumulation_steps", None) is not None
+        else int(hw["gradient_accumulation_steps"])
+    )
+    eval_bs = (
+        int(args.eval_batch_size)
+        if getattr(args, "eval_batch_size", None) is not None
+        else int(hw["eval_batch_size"])
+    )
+    lr = (
+        float(args.learning_rate)
+        if getattr(args, "learning_rate", None) is not None
+        else float(tr_cfg["learning_rate"])
+    )
+    return batch_size, grad_accum, eval_bs, lr
+
+
 def evaluate_both_domains(
     model,
     processor,

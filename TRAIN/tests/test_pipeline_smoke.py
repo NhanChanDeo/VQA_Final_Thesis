@@ -385,13 +385,13 @@ def test_metrics_hardware_checkpoint_and_trainer_e2e(tmp_path):
     hw_cpu = resolve_hardware_profile("auto")
     assert hw_cpu["name"] == "cpu"
     hw_l4 = resolve_hardware_profile("l4_24gb")
-    assert hw_l4["dtype"] == "bf16" and hw_l4["per_device_train_batch_size"] == 4
+    assert hw_l4["dtype"] == "bf16" and hw_l4["per_device_train_batch_size"] == 8 and hw_l4["gradient_accumulation_steps"] == 8
     hw_a100 = resolve_hardware_profile("a100_40gb")
-    assert hw_a100["dtype"] == "bf16" and hw_a100["per_device_train_batch_size"] == 8 and hw_a100["eval_batch_size"] == 16
+    assert hw_a100["dtype"] == "bf16" and hw_a100["per_device_train_batch_size"] == 16 and hw_a100["gradient_accumulation_steps"] == 4
     hw_g4 = resolve_hardware_profile("g4_96gb")
-    assert hw_g4["dtype"] == "bf16" and hw_g4["load_in_4bit"] is False and hw_g4["per_device_train_batch_size"] == 16
+    assert hw_g4["dtype"] == "bf16" and hw_g4["load_in_4bit"] is False and hw_g4["per_device_train_batch_size"] == 16 and hw_g4["gradient_accumulation_steps"] == 4
     hw_t4 = resolve_hardware_profile("t4_16gb")
-    assert hw_t4["dtype"] == "fp16" and hw_t4["per_device_train_batch_size"] == 2
+    assert hw_t4["dtype"] == "fp16" and hw_t4["per_device_train_batch_size"] == 4 and hw_t4["gradient_accumulation_steps"] == 16
 
     # End-to-end trainer + CheckpointManager with Drive backup mirror (no network)
     backbone = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
@@ -854,3 +854,338 @@ def test_z0_image_id_dedup_and_notebook_defaults():
         assert 'MODEL_KEY = "smolvlm_500m"' in src, f"Expected MODEL_KEY='smolvlm_500m' in {p.name}"
         if p.name != "00_Z0_ZeroShot_and_DomainGap.ipynb":
             assert "--save_every_steps" in src, f"Expected --save_every_steps in {p.name}"
+            assert "SAVE_EVERY_STEPS = 64" in src, f"Expected SAVE_EVERY_STEPS = 64 in {p.name}"
+
+
+def test_hardware_profiles_effective_bs64_parity():
+    import yaml
+
+    bb_cfg = yaml.safe_load((REPO_ROOT / "TRAIN/ALT_THREE_SPLITS/configs/backbones.yaml").read_text(encoding="utf-8"))
+    base_cfg = yaml.safe_load((REPO_ROOT / "TRAIN/ALT_THREE_SPLITS/configs/baselines_B1_B5.yaml").read_text(encoding="utf-8"))
+    m_cfg = yaml.safe_load((REPO_ROOT / "TRAIN/ALT_THREE_SPLITS/configs/crossvqa_M1_M3.yaml").read_text(encoding="utf-8"))
+
+    for prof_name in ("l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"):
+        yaml_p = bb_cfg["hardware_profiles"][prof_name]
+        code_p = resolve_hardware_profile(prof_name)
+        assert yaml_p["per_device_train_batch_size"] == code_p["per_device_train_batch_size"]
+        assert yaml_p["gradient_accumulation_steps"] == code_p["gradient_accumulation_steps"]
+        assert yaml_p["eval_batch_size"] == code_p["eval_batch_size"]
+        assert yaml_p["smolvlm_longest_edge"] == 2048
+        assert code_p["smolvlm_longest_edge"] == 2048
+        assert yaml_p["per_device_train_batch_size"] * yaml_p["gradient_accumulation_steps"] == 64
+
+    for cfg in (base_cfg, m_cfg):
+        assert cfg["checkpoints"]["checkpoint_namespace"] == "ebs64"
+        assert cfg["checkpoints"]["save_every_steps"] == 64
+        assert cfg["training"]["effective_batch_size"] == 64
+        assert cfg["training"]["learning_rate"] == pytest.approx(4.0e-4)
+
+
+def test_mid_epoch_exact_resume_map_style(tmp_path):
+    class _MapDataset(torch.utils.data.Dataset):
+        def __init__(self, n: int = 16) -> None:
+            self.items = [
+                {
+                    "domain_type": "document_text" if i % 2 == 0 else "scene_text",
+                    "image": Image.new("RGB", (16, 16), color=(i * 10 % 255, 50, 80)),
+                    "question": f"q{i}?",
+                    "answers": ["ans"],
+                }
+                for i in range(n)
+            ]
+
+        def __len__(self) -> int:
+            return len(self.items)
+
+        def __getitem__(self, idx: int):
+            return self.items[idx]
+
+    class _DeterministicProc(_DummyProcessor):
+        def __call__(self, text, images, padding=True, return_tensors="pt"):
+            out = super().__call__(text=text, images=images, padding=padding, return_tensors=return_tensors)
+            pix = torch.stack([
+                torch.full((3, 16, 16), float((im[0] if isinstance(im, list) else im).getpixel((0, 0))[0]) / 255.0)
+                for im in images
+            ])
+            out["pixel_values"] = pix
+            return out
+
+    ds = _MapDataset(16)
+    proc = _DeterministicProc(with_chat_template=False)
+    torch.manual_seed(77)
+    ref_model = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    res_model = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    res_model.load_state_dict(ref_model.state_dict())
+
+    ref_dir = tmp_path / "ref"
+    torch.manual_seed(999)
+    ref_trainer = CrossVQATrainer(
+        model=ref_model,
+        processor=proc,
+        run_dir=str(ref_dir),
+        model_type="smolvlm",
+        device="cpu",
+        lr=1e-3,
+        warmup_ratio=0.1,
+        gradient_accumulation_steps=1,
+        optim_name="adamw",
+    )
+    ref_summary = ref_trainer.fit(ds, epochs=2, batch_size=4, seed=42)
+    assert ref_summary["opt_steps"] == 8
+
+    # Interrupted run: stops after opt_step == 2 in Epoch 1
+    res_dir = tmp_path / "res"
+    ckpt_mgr = CheckpointManager(local_ckpt_dir=str(res_dir / "checkpoints"), hf_repo_id=None, hf_token=None)
+
+    class _AbortAfterStep2(RuntimeError):
+        pass
+
+    orig_save = ckpt_mgr.save
+
+    def _save_and_abort(mdl, tag="latest", trainer_state=None, resume_state=None):
+        p = orig_save(mdl, tag=tag, trainer_state=trainer_state, resume_state=resume_state)
+        if tag == "latest" and (trainer_state or {}).get("opt_step") == 2:
+            raise _AbortAfterStep2("simulated disconnect")
+        return p
+
+    ckpt_mgr.save = _save_and_abort
+    torch.manual_seed(999)
+    res_trainer_1 = CrossVQATrainer(
+        model=res_model,
+        processor=proc,
+        run_dir=str(res_dir),
+        model_type="smolvlm",
+        device="cpu",
+        lr=1e-3,
+        warmup_ratio=0.1,
+        gradient_accumulation_steps=1,
+        optim_name="adamw",
+        checkpoint_manager=ckpt_mgr,
+    )
+    with pytest.raises(_AbortAfterStep2):
+        res_trainer_1.fit(
+            ds,
+            epochs=2,
+            batch_size=4,
+            save_every_steps=2,
+            seed=42,
+            config_fingerprint={"effective_batch_size": 4, "model": "tiny", "exp": "B1"},
+        )
+
+    # Restore model weights + resume_state.pt into a fresh model instance and finish
+    ckpt_mgr.save = orig_save
+    resumed_model = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    state_pt = res_dir / "checkpoints" / "latest" / "model_state.pt"
+    resumed_model.load_state_dict(torch.load(state_pt, map_location="cpu", weights_only=True))
+
+    res_trainer_2 = CrossVQATrainer(
+        model=resumed_model,
+        processor=proc,
+        run_dir=str(res_dir),
+        model_type="smolvlm",
+        device="cpu",
+        lr=1e-3,
+        warmup_ratio=0.1,
+        gradient_accumulation_steps=1,
+        optim_name="adamw",
+        checkpoint_manager=ckpt_mgr,
+    )
+    res_summary = res_trainer_2.fit(
+        ds,
+        epochs=2,
+        batch_size=4,
+        save_every_steps=2,
+        seed=42,
+        resume_from=str(res_dir / "checkpoints" / "latest"),
+        config_fingerprint={"effective_batch_size": 4, "model": "tiny", "exp": "B1"},
+    )
+    assert res_summary["opt_steps"] == 8
+    assert not (res_dir / "checkpoints" / "best" / "resume_state.pt").exists()
+
+    ref_logs = [json.loads(l) for l in (ref_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    res_logs = [json.loads(l) for l in (res_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(ref_logs) == len(res_logs) == 8
+    assert [e["lr"] for e in res_logs] == pytest.approx([e["lr"] for e in ref_logs], rel=1e-6)
+    assert [e["loss_total"] for e in res_logs] == pytest.approx([e["loss_total"] for e in ref_logs], abs=1e-5)
+    for k in ref_model.state_dict():
+        assert torch.allclose(ref_model.state_dict()[k], resumed_model.state_dict()[k], atol=1e-5)
+
+
+def test_epoch_boundary_and_completed_run_resume(tmp_path):
+    class _MapDataset(torch.utils.data.Dataset):
+        def __init__(self, n: int = 8) -> None:
+            self.items = [
+                {"domain_type": "scene_text", "image": Image.new("RGB", (16, 16)), "question": f"q{i}?", "answers": ["ans"]}
+                for i in range(n)
+            ]
+
+        def __len__(self):
+            return len(self.items)
+
+        def __getitem__(self, idx):
+            return self.items[idx]
+
+    ds = _MapDataset(8)
+    proc = _DummyProcessor(with_chat_template=False)
+    model = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    run_dir = tmp_path / "ep_resume"
+    ckpt_mgr = CheckpointManager(local_ckpt_dir=str(run_dir / "checkpoints"), hf_repo_id=None, hf_token=None)
+
+    # Complete Epoch 1 (out of 2) by running epochs=1 first, then pretend total is 2 on resume
+    t1 = CrossVQATrainer(model=model, processor=proc, run_dir=str(run_dir), device="cpu", lr=1e-3, gradient_accumulation_steps=1, checkpoint_manager=ckpt_mgr)
+    t1.fit(ds, epochs=2, batch_size=4, max_steps_per_epoch=2, eval_fn=lambda: {"selection_score": 0.4}, seed=42)
+
+    # Simulate interrupt right after Epoch 1 saved
+    r_state = CheckpointManager.load_resume_state(run_dir / "checkpoints" / "latest")
+    assert r_state is not None
+    # Force epoch=1, epoch_completed=True in latest for boundary test
+    r_state["epoch"] = 1
+    r_state["epoch_completed"] = True
+    r_state["samples_seen_in_epoch"] = 0
+    r_state["opt_step"] = 2
+    torch.save(r_state, run_dir / "checkpoints" / "latest" / "resume_state.pt")
+
+    t2 = CrossVQATrainer(model=model, processor=proc, run_dir=str(run_dir), device="cpu", lr=1e-3, gradient_accumulation_steps=1, checkpoint_manager=ckpt_mgr)
+    s2 = t2.fit(ds, epochs=2, batch_size=4, eval_fn=lambda: {"selection_score": 0.7}, seed=42, resume_from=str(run_dir / "checkpoints" / "latest"))
+    assert s2["opt_steps"] == 4
+
+    # Re-run after Epoch 2 already completed -> should skip training cleanly
+    t3 = CrossVQATrainer(model=model, processor=proc, run_dir=str(run_dir), device="cpu", lr=1e-3, gradient_accumulation_steps=1, checkpoint_manager=ckpt_mgr)
+    s3 = t3.fit(ds, epochs=2, batch_size=4, seed=42, resume_from=str(run_dir / "checkpoints" / "latest"))
+    assert s3.get("skipped_already_completed") is True
+    assert s3["opt_steps"] == 4
+
+
+def test_cross_gpu_batch_size_resume_and_fingerprint_guard(tmp_path):
+    class _MapDataset(torch.utils.data.Dataset):
+        def __init__(self, n: int = 16) -> None:
+            self.items = [
+                {"domain_type": "scene_text", "image": Image.new("RGB", (16, 16)), "question": f"q{i}?", "answers": ["ans"]}
+                for i in range(n)
+            ]
+
+        def __len__(self):
+            return len(self.items)
+
+        def __getitem__(self, idx):
+            return self.items[idx]
+
+    class _DeterministicProc(_DummyProcessor):
+        def __call__(self, text, images, padding=True, return_tensors="pt"):
+            out = super().__call__(text=text, images=images, padding=padding, return_tensors=return_tensors)
+            pix = torch.stack([
+                torch.full((3, 16, 16), float((im[0] if isinstance(im, list) else im).getpixel((0, 0))[0]) / 255.0)
+                for im in images
+            ])
+            out["pixel_values"] = pix
+            return out
+
+    ds = _MapDataset(16)
+    proc = _DeterministicProc(with_chat_template=False)
+    model = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    run_dir = tmp_path / "cross_gpu"
+    ckpt_mgr = CheckpointManager(local_ckpt_dir=str(run_dir / "checkpoints"), hf_repo_id=None, hf_token=None)
+
+    # Save at opt_step=1 on T4-like bs=4, accum=2 (ebs=8 -> 8 samples seen)
+    t1 = CrossVQATrainer(model=model, processor=proc, run_dir=str(run_dir), device="cpu", lr=1e-3, gradient_accumulation_steps=2, checkpoint_manager=ckpt_mgr)
+    t1.fit(
+        ds, epochs=1, batch_size=4, save_every_steps=1, seed=42,
+        config_fingerprint={"effective_batch_size": 8, "model": "smolvlm_500m", "exp": "B1"},
+    )
+    # Manually rewind saved latest to opt_step=1 mid-epoch (8 samples seen)
+    r_state = CheckpointManager.load_resume_state(run_dir / "checkpoints" / "latest")
+    r_state["epoch"] = 1
+    r_state["epoch_completed"] = False
+    r_state["samples_seen_in_epoch"] = 8
+    r_state["opt_step"] = 1
+    torch.save(r_state, run_dir / "checkpoints" / "latest" / "resume_state.pt")
+
+    # Mismatched effective_batch_size (e.g. 64 != 8) must raise ValueError
+    t_bad = CrossVQATrainer(model=model, processor=proc, run_dir=str(run_dir), device="cpu", lr=1e-3, gradient_accumulation_steps=8, checkpoint_manager=ckpt_mgr)
+    with pytest.raises(ValueError, match="effective_batch_size"):
+        t_bad.fit(
+            ds, epochs=1, batch_size=8, seed=42,
+            resume_from=str(run_dir / "checkpoints" / "latest"),
+            config_fingerprint={"effective_batch_size": 64, "model": "smolvlm_500m", "exp": "B1"},
+        )
+
+    # Matching ebs=8 on L4-like bs=8, accum=1 should succeed and process remaining 8 samples (1 opt step)
+    t_l4 = CrossVQATrainer(model=model, processor=proc, run_dir=str(run_dir), device="cpu", lr=1e-3, gradient_accumulation_steps=1, checkpoint_manager=ckpt_mgr)
+    s_l4 = t_l4.fit(
+        ds, epochs=1, batch_size=8, seed=42,
+        resume_from=str(run_dir / "checkpoints" / "latest"),
+        config_fingerprint={"effective_batch_size": 8, "model": "smolvlm_500m", "exp": "B1"},
+    )
+    assert s_l4["opt_steps"] == 2
+
+
+def test_interleaved_and_paired_skip_samples():
+    from TRAIN.src.dataset import InterleavedCrossVQADataset
+
+    doc = [{"sample_id": f"d{i}", "domain_type": "document_text"} for i in range(6)]
+    tv = [{"sample_id": f"s{i}", "domain_type": "scene_text"} for i in range(6)]
+
+    inter = InterleavedCrossVQADataset(doc, tv, doc_prob=0.5, seed=42)
+    inter.set_epoch(0, skip_samples=0)
+    full_inter = [x["sample_id"] for x in inter]
+    inter.set_epoch(0, skip_samples=5)
+    tail_inter = [x["sample_id"] for x in inter]
+    assert tail_inter == full_inter[5:]
+
+    paired = PairedDomainDataset(doc, tv, max_pairs=5, seed=42)
+    paired.set_epoch(0, skip_samples=0)
+    full_paired = [x["sample_id"] for x in paired]
+    paired.set_epoch(0, skip_samples=3)  # odd skip boundary
+    tail_paired = [x["sample_id"] for x in paired]
+    assert tail_paired == full_paired[3:]
+
+
+def test_align_queue_resume_and_legacy_fallback(tmp_path):
+    mmd1 = MultiKernelRBFMMDLoss(queue_size=8)
+    vis = torch.randn(4, 16)
+    dom = torch.tensor([0, 0, 1, 1])
+    _ = mmd1(vis, dom)
+    q_state = mmd1.get_queue_state()
+
+    mmd2 = MultiKernelRBFMMDLoss(queue_size=8)
+    mmd2.load_queue_state(q_state)
+    assert len(mmd2.doc_queue) == len(mmd1.doc_queue) == 2
+    assert torch.allclose(mmd2.doc_queue.get(torch.device("cpu"), torch.float32), mmd1.doc_queue.get(torch.device("cpu"), torch.float32))
+
+    # Legacy checkpoint folder without resume_state.pt falls back gracefully
+    legacy_dir = tmp_path / "legacy_latest"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    assert CheckpointManager.load_resume_state(legacy_dir) is None
+    model = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    proc = _DummyProcessor(with_chat_template=False)
+    ds = [{"domain_type": "scene_text", "image": Image.new("RGB", (16, 16)), "question": "q?", "answers": ["ans"]}] * 4
+    trainer = CrossVQATrainer(model=model, processor=proc, run_dir=str(tmp_path / "run_leg"), device="cpu", gradient_accumulation_steps=1)
+    summary = trainer.fit(ds, epochs=1, batch_size=2, resume_from=str(legacy_dir))
+    assert summary["opt_steps"] == 2
+
+
+def test_hf_namespace_isolation_paths():
+    sys.path.insert(0, str(REPO_ROOT / "TRAIN/ALT_THREE_SPLITS/scripts"))
+    from _common import resolve_checkpoint_paths
+
+    run_rel, hf_subpath = resolve_checkpoint_paths(
+        runs_root="TRAIN/ALT_THREE_SPLITS/runs",
+        model="smolvlm_500m",
+        exp_dir="B1_target_only",
+        seed=42,
+        checkpoint_namespace="ebs64",
+    )
+    assert hf_subpath == "alt_three_splits/ebs64/smolvlm_500m/B1_target_only/seed_42"
+    assert run_rel.as_posix().endswith("TRAIN/ALT_THREE_SPLITS/runs/smolvlm_500m/ebs64/B1_target_only/seed_42")
+
+    fs_rel, fs_hf = resolve_checkpoint_paths(
+        runs_root="TRAIN/ALT_THREE_SPLITS/runs",
+        model="smolvlm_500m",
+        exp_dir="M2_dual_lora_align",
+        seed=42,
+        checkpoint_namespace="ebs64",
+        few_shot_pct=5,
+        few_shot_tag="M2",
+    )
+    assert fs_hf == "alt_three_splits/ebs64/smolvlm_500m/few_shot/M2_pct_05/seed_42"
+    assert fs_rel.as_posix().endswith("TRAIN/ALT_THREE_SPLITS/runs/smolvlm_500m/ebs64/few_shot/M2_pct_05/seed_42")

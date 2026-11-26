@@ -6,6 +6,7 @@ Unified streaming and local NVMe dataset loader for CrossVQA:
 """
 
 import io
+import itertools
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 import polars as pl
@@ -124,6 +125,21 @@ def _iter_shuffled_domain(ds: Any, seed: int, shuffle_buffer: int) -> Iterator[D
     yield from iter(stream_ds)
 
 
+def _iter_shuffled_domain_lazy(ds: Any, seed: int, shuffle_buffer: int):
+    """Yields zero-decode callables (lambda: ds[idx]) for map-style datasets so skipping is instant."""
+    import random
+
+    if _is_map_style_dataset(ds):
+        indices = list(range(len(ds)))
+        random.Random(seed).shuffle(indices)
+        for idx in indices:
+            yield (lambda i=idx: ds[i])
+        return
+    stream_ds = ds.shuffle(seed=seed, buffer_size=shuffle_buffer) if hasattr(ds, "shuffle") else ds
+    for item in iter(stream_ds):
+        yield (lambda x=item: x)
+
+
 class InterleavedCrossVQADataset(IterableDataset):
     """Interleaves DocVQA and TextVQA streams (or map-style Arrow datasets) for B3 joint training."""
 
@@ -142,9 +158,11 @@ class InterleavedCrossVQADataset(IterableDataset):
         self.seed = int(seed)
         self.shuffle_buffer = int(shuffle_buffer)
         self._epoch = 0
+        self._skip_samples = 0
 
-    def set_epoch(self, epoch: int) -> None:
+    def set_epoch(self, epoch: int, skip_samples: int = 0) -> None:
         self._epoch = int(epoch)
+        self._skip_samples = max(0, int(skip_samples))
 
     def __len__(self) -> int:
         if _is_map_style_dataset(self.doc_dataset) and _is_map_style_dataset(self.scene_dataset):
@@ -156,23 +174,30 @@ class InterleavedCrossVQADataset(IterableDataset):
 
         ep_seed = self.seed + self._epoch * 1009
         rng = random.Random(ep_seed)
-        doc_it = _iter_shuffled_domain(self.doc_dataset, ep_seed, self.shuffle_buffer)
-        scene_it = _iter_shuffled_domain(self.scene_dataset, ep_seed + 1, self.shuffle_buffer)
+        doc_it = _iter_shuffled_domain_lazy(self.doc_dataset, ep_seed, self.shuffle_buffer)
+        scene_it = _iter_shuffled_domain_lazy(self.scene_dataset, ep_seed + 1, self.shuffle_buffer)
         doc_done = False
         scene_done = False
+        remaining_skip = self._skip_samples
 
         while not (doc_done and scene_done):
             pick_doc = (not doc_done) and (scene_done or rng.random() < self.doc_prob)
             if pick_doc:
                 try:
-                    yield next(doc_it)
+                    getter = next(doc_it)
                 except StopIteration:
                     doc_done = True
+                    continue
             else:
                 try:
-                    yield next(scene_it)
+                    getter = next(scene_it)
                 except StopIteration:
                     scene_done = True
+                    continue
+            if remaining_skip > 0:
+                remaining_skip -= 1
+                continue
+            yield getter()
 
 
 class PairedDomainDataset(IterableDataset):
@@ -196,9 +221,11 @@ class PairedDomainDataset(IterableDataset):
         self.seed = int(seed)
         self.shuffle_buffer = int(shuffle_buffer)
         self._epoch = 0
+        self._skip_samples = 0
 
-    def set_epoch(self, epoch: int) -> None:
+    def set_epoch(self, epoch: int, skip_samples: int = 0) -> None:
         self._epoch = int(epoch)
+        self._skip_samples = max(0, int(skip_samples))
 
     def __len__(self) -> int:
         if _is_map_style_dataset(self.scene_dataset):
@@ -213,31 +240,38 @@ class PairedDomainDataset(IterableDataset):
     def __iter__(self) -> Iterator[Dict[str, Any]]:
         ep_seed = self.seed + self._epoch * 1009
         doc_cycle = 0
-        doc_it = _iter_shuffled_domain(self.doc_dataset, ep_seed, self.shuffle_buffer)
-        scene_it = _iter_shuffled_domain(self.scene_dataset, ep_seed + 1, self.shuffle_buffer)
+        doc_it = _iter_shuffled_domain_lazy(self.doc_dataset, ep_seed, self.shuffle_buffer)
+        scene_it = _iter_shuffled_domain_lazy(self.scene_dataset, ep_seed + 1, self.shuffle_buffer)
 
         pairs_emitted = 0
+        remaining_skip = self._skip_samples
         # Primary target epoch stops once TextVQA (target) completes unless max_pairs is set
         while True:
             if self.max_pairs is not None and pairs_emitted >= self.max_pairs:
                 break
             try:
-                scene_sample = next(scene_it)
+                scene_getter = next(scene_it)
             except StopIteration:
                 break
 
             try:
-                doc_sample = next(doc_it)
+                doc_getter = next(doc_it)
             except StopIteration:
                 doc_cycle += 1
-                doc_it = _iter_shuffled_domain(self.doc_dataset, ep_seed + doc_cycle * 37, self.shuffle_buffer)
+                doc_it = _iter_shuffled_domain_lazy(self.doc_dataset, ep_seed + doc_cycle * 37, self.shuffle_buffer)
                 try:
-                    doc_sample = next(doc_it)
+                    doc_getter = next(doc_it)
                 except StopIteration:
                     break
 
-            yield doc_sample
-            yield scene_sample
+            if remaining_skip > 0:
+                remaining_skip -= 1
+            else:
+                yield doc_getter()
+            if remaining_skip > 0:
+                remaining_skip -= 1
+            else:
+                yield scene_getter()
             pairs_emitted += 1
 
 

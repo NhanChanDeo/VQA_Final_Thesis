@@ -15,10 +15,12 @@ from pathlib import Path
 import torch
 
 from _common import (
+    apply_training_overrides,
     ensure_repo_root,
     evaluate_both_domains,
     get_git_sha,
     load_yaml,
+    resolve_checkpoint_paths,
     resolve_hf_token,
     set_seed,
 )
@@ -43,8 +45,13 @@ def main() -> None:
     parser.add_argument("--exp", required=True, choices=["B1", "B2", "B3", "B4", "B5"])
     parser.add_argument("--model", default="smolvlm_500m", choices=["smolvlm_500m", "smolvlm_base", "qwen2_vl_2b"])
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--hardware_profile", default="auto", choices=["auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb", "cpu"])
+    parser.add_argument("--hardware_profile", default="auto")
     parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=None)
+    parser.add_argument("--eval_batch_size", type=int, default=None)
+    parser.add_argument("--learning_rate", type=float, default=None)
+    parser.add_argument("--checkpoint_namespace", default=None)
     parser.add_argument("--few_shot_pct", type=int, default=100, choices=[1, 5, 10, 25, 100])
     parser.add_argument("--include_ocr", action="store_true")
     parser.add_argument("--use_soft_weights", action="store_true")
@@ -54,7 +61,9 @@ def main() -> None:
     parser.add_argument("--hf_token", default=None)
     parser.add_argument("--gdrive_backup_dir", default=None)
     parser.add_argument("--resume_from_hub", action="store_true")
-    parser.add_argument("--save_every_steps", type=int, default=250)
+    parser.add_argument("--allow_mismatched_resume", action="store_true")
+    parser.add_argument("--no_save_optimizer_state", action="store_true")
+    parser.add_argument("--save_every_steps", type=int, default=None)
     parser.add_argument("--max_train_steps", type=int, default=None)
     parser.add_argument("--max_eval_samples", type=int, default=None)
     args = parser.parse_args()
@@ -69,15 +78,27 @@ def main() -> None:
     model_type = model_info["model_type"]
     tr_cfg = base_cfg["training"]
     epochs = args.epochs if args.epochs is not None else int(tr_cfg["epochs"])
+    batch_size, grad_accum, eval_batch_size, lr = apply_training_overrides(hw, tr_cfg, args)
+    effective_batch_size = batch_size * grad_accum
+    ckpt_ns = (
+        args.checkpoint_namespace
+        if args.checkpoint_namespace is not None
+        else base_cfg.get("checkpoints", {}).get("checkpoint_namespace", "")
+    )
+    save_every_cfg = int(base_cfg.get("checkpoints", {}).get("save_every_steps", 64))
+    save_every_arg = args.save_every_steps if args.save_every_steps is not None else save_every_cfg
 
     ocr_tag = "_ocr" if args.include_ocr else ""
-    if args.few_shot_pct < 100:
-        run_rel = Path(base_cfg["runs_root"]) / args.model / "few_shot" / f"{args.exp}{ocr_tag}_pct_{args.few_shot_pct:02d}" / f"seed_{args.seed}"
-        hf_subpath = f"alt_three_splits/{args.model}/few_shot/{args.exp}{ocr_tag}_pct_{args.few_shot_pct:02d}/seed_{args.seed}"
-    else:
-        exp_dir = EXP_FOLDER_MAP[args.exp] + ocr_tag
-        run_rel = Path(base_cfg["runs_root"]) / args.model / exp_dir / f"seed_{args.seed}"
-        hf_subpath = f"alt_three_splits/{args.model}/{exp_dir}/seed_{args.seed}"
+    exp_dir = EXP_FOLDER_MAP[args.exp] + ocr_tag
+    run_rel, hf_subpath = resolve_checkpoint_paths(
+        runs_root=base_cfg["runs_root"],
+        model=args.model,
+        exp_dir=exp_dir,
+        seed=args.seed,
+        checkpoint_namespace=ckpt_ns,
+        few_shot_pct=args.few_shot_pct,
+        few_shot_tag=f"{args.exp}{ocr_tag}",
+    )
     run_rel.mkdir(parents=True, exist_ok=True)
 
     hf_token = resolve_hf_token(args.hf_token)
@@ -91,19 +112,26 @@ def main() -> None:
         private=bool(base_cfg["checkpoints"].get("hf_private", True)),
     )
 
-    # Resolve Stage-1 checkpoint for B4 / B5 or --resume_from_hub
+    # Resolve own latest checkpoint for resumption vs Stage-1 checkpoint for B4 / B5
     adapter_ckpt = args.stage1_adapter_path
+    resume_dir = None
     if args.resume_from_hub and adapter_ckpt is None:
         restored = ckpt_mgr.restore_checkpoint("latest")
         if restored is not None:
             adapter_ckpt = str(restored)
+            resume_dir = str(restored)
 
     if adapter_ckpt is None and args.exp in ("B4", "B5"):
         stage1_folder = ("B2_source_only" if args.exp == "B4" else "B1_target_only") + ocr_tag
-        stage1_hf_path = f"alt_three_splits/{args.model}/{stage1_folder}/seed_{args.seed}"
-        stage1_local = Path(base_cfg["runs_root"]) / args.model / stage1_folder / f"seed_{args.seed}" / "checkpoints"
+        stage1_rel, stage1_hf_path = resolve_checkpoint_paths(
+            runs_root=base_cfg["runs_root"],
+            model=args.model,
+            exp_dir=stage1_folder,
+            seed=args.seed,
+            checkpoint_namespace=ckpt_ns,
+        )
         stage1_mgr = CheckpointManager(
-            local_ckpt_dir=str(stage1_local),
+            local_ckpt_dir=str(stage1_rel / "checkpoints"),
             hf_repo_id=args.hf_ckpt_repo,
             hf_path_in_repo=stage1_hf_path,
             hf_token=hf_token,
@@ -113,7 +141,7 @@ def main() -> None:
         restored_s1 = stage1_mgr.restore_checkpoint("best")
         if restored_s1 is None:
             raise FileNotFoundError(
-                f"{args.exp} requires Stage-1 checkpoint from {stage1_folder} (seed {args.seed}), "
+                f"{args.exp} requires Stage-1 checkpoint from {stage1_hf_path} (seed {args.seed}), "
                 "or pass --stage1_adapter_path explicitly."
             )
         adapter_ckpt = str(restored_s1)
@@ -172,7 +200,7 @@ def main() -> None:
             device=device,
             include_ocr=args.include_ocr,
             max_new_tokens=tr_cfg["max_new_tokens"],
-            eval_batch_size=hw["eval_batch_size"],
+            eval_batch_size=eval_batch_size,
             max_eval_samples=args.max_eval_samples,
             local_data_dir=args.local_data_dir,
         )
@@ -185,10 +213,10 @@ def main() -> None:
         run_dir=str(run_rel),
         model_type=model_type,
         device=device,
-        lr=tr_cfg["learning_rate"],
+        lr=lr,
         weight_decay=tr_cfg["weight_decay"],
         warmup_ratio=tr_cfg["warmup_ratio"],
-        gradient_accumulation_steps=hw["gradient_accumulation_steps"],
+        gradient_accumulation_steps=grad_accum,
         max_grad_norm=tr_cfg["max_grad_norm"],
         optim_name=hw["optim"],
         include_ocr=args.include_ocr,
@@ -196,25 +224,53 @@ def main() -> None:
         checkpoint_manager=ckpt_mgr,
     )
 
-    save_every = args.save_every_steps if args.save_every_steps and args.save_every_steps > 0 else None
+    fingerprint = {
+        "exp": args.exp,
+        "model": args.model,
+        "seed": args.seed,
+        "effective_batch_size": effective_batch_size,
+        "lr": lr,
+        "lora_r": tr_cfg["lora_r"],
+        "checkpoint_namespace": ckpt_ns,
+    }
+    save_every = save_every_arg if save_every_arg and save_every_arg > 0 else None
     summary = trainer.fit(
         train_dataset=train_ds,
         epochs=epochs,
-        batch_size=hw["per_device_train_batch_size"],
+        batch_size=batch_size,
         max_steps_per_epoch=args.max_train_steps,
         eval_fn=_eval_val,
         monitor_metric="selection_score",
         save_every_steps=save_every,
         seed=args.seed,
+        resume_from=resume_dir,
+        stage_name="main",
+        config_fingerprint=fingerprint,
+        save_optimizer_state=not args.no_save_optimizer_state,
+        allow_mismatched_resume=args.allow_mismatched_resume,
     )
 
     card_cfg = {
         "experiment": {"id": f"{args.exp}_{args.model}{ocr_tag}_seed{args.seed}", "exp": args.exp, "seed": args.seed, "git_sha": get_git_sha()},
         "data": {"regime": "alt_three_splits", "revision": "three-splits", "few_shot_pct": args.few_shot_pct, "include_ocr": args.include_ocr},
         "model": {"backbone": model_info["repo_id"], "architecture_mode": "standard_lora", "lora_r": tr_cfg["lora_r"], "lora_alpha": tr_cfg["lora_alpha"]},
-        "training": {"hardware_profile": hw["name"], "epochs": epochs, "lr": tr_cfg["learning_rate"], "elapsed_sec": summary["elapsed_sec"]},
+        "training": {
+            "hardware_profile": hw["name"],
+            "checkpoint_namespace": ckpt_ns,
+            "per_device_train_batch_size": batch_size,
+            "gradient_accumulation_steps": grad_accum,
+            "effective_batch_size": effective_batch_size,
+            "epochs": epochs,
+            "lr": lr,
+            "elapsed_sec": summary["elapsed_sec"],
+        },
     }
-    save_run_card(str(run_rel), card_cfg, summary["best_metrics"], extra_meta={"stage1_adapter_used": adapter_ckpt})
+    save_run_card(
+        str(run_rel),
+        card_cfg,
+        summary["best_metrics"],
+        extra_meta={"stage1_adapter_used": adapter_ckpt, "resumed_from": resume_dir},
+    )
     print(f"\nCompleted {args.exp} ({args.model}, seed={args.seed}). Artifacts saved to {run_rel}")
 
 

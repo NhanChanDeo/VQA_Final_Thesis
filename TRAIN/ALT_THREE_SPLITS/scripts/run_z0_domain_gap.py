@@ -306,7 +306,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Run Z0 zero-shot + Phase A8/A9 domain gap diagnostics.")
     parser.add_argument("--model", default="smolvlm_500m", choices=["smolvlm_500m", "smolvlm_base", "qwen2_vl_2b"])
-    parser.add_argument("--hardware_profile", default="auto", choices=["auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb", "cpu"])
+    parser.add_argument("--hardware_profile", default="auto")
     parser.add_argument("--eval_splits", nargs="+", default=["validation"], help="Splits to evaluate VQA zero-shot on.")
     parser.add_argument("--domain_gap_only", action="store_true", help="Skip VQA text generation and run only Phase A8/A9 domain gap.")
     parser.add_argument("--domain_gap_split", default="validation", choices=["validation", "test", "train"])

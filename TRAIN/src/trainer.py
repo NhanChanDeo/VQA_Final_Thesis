@@ -3,15 +3,19 @@ Standardized training, checkpoint resilience, hardware profiling, and evaluation
 utilities for CrossVQA baselines (Z0, B1–B5) and proposed methods (M1–M3).
 """
 
+import inspect
 import io
+import itertools
 import json
 import math
 import os
+import random
 import shutil
 import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+import numpy as np
 from PIL import Image
 import torch
 import torch.nn.functional as F
@@ -30,9 +34,9 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "dtype": "bf16",
         "load_in_4bit": True,
         "attn_implementation": "auto",
-        "per_device_train_batch_size": 4,
-        "gradient_accumulation_steps": 4,
-        "eval_batch_size": 8,
+        "per_device_train_batch_size": 8,
+        "gradient_accumulation_steps": 8,
+        "eval_batch_size": 16,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 1280 * 1024,
         "smolvlm_longest_edge": 2048,
@@ -43,8 +47,8 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "dtype": "bf16",
         "load_in_4bit": True,
         "attn_implementation": "auto",
-        "per_device_train_batch_size": 8,
-        "gradient_accumulation_steps": 2,
+        "per_device_train_batch_size": 16,
+        "gradient_accumulation_steps": 4,
         "eval_batch_size": 16,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 1536 * 1024,
@@ -57,7 +61,7 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "load_in_4bit": False,
         "attn_implementation": "auto",
         "per_device_train_batch_size": 16,
-        "gradient_accumulation_steps": 1,
+        "gradient_accumulation_steps": 4,
         "eval_batch_size": 32,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 2048 * 1024,
@@ -69,12 +73,12 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "dtype": "fp16",
         "load_in_4bit": True,
         "attn_implementation": "sdpa",
-        "per_device_train_batch_size": 2,
-        "gradient_accumulation_steps": 8,
-        "eval_batch_size": 4,
+        "per_device_train_batch_size": 4,
+        "gradient_accumulation_steps": 16,
+        "eval_batch_size": 8,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 1024 * 1024,
-        "smolvlm_longest_edge": 1536,
+        "smolvlm_longest_edge": 2048,
         "optim": "paged_adamw_8bit",
     },
     "cpu": {
@@ -160,6 +164,7 @@ class CheckpointManager:
         model,
         tag: str = "latest",
         trainer_state: Optional[Dict[str, Any]] = None,
+        resume_state: Optional[Dict[str, Any]] = None,
     ) -> Path:
         target_dir = self.local_ckpt_dir / tag
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -174,6 +179,9 @@ class CheckpointManager:
                 json.dumps(trainer_state, indent=2), encoding="utf-8"
             )
 
+        if resume_state is not None and tag == "latest":
+            torch.save(resume_state, target_dir / "resume_state.pt")
+
         if self.gdrive_backup_dir is not None:
             drive_target = self.gdrive_backup_dir / tag
             drive_target.mkdir(parents=True, exist_ok=True)
@@ -184,14 +192,27 @@ class CheckpointManager:
 
             api = HfApi(token=self.hf_token)
             api.create_repo(repo_id=self.hf_repo_id, repo_type="model", private=self.private, exist_ok=True)
-            api.upload_folder(
-                folder_path=str(target_dir),
-                repo_id=self.hf_repo_id,
-                path_in_repo=f"{self.hf_path_in_repo}/{tag}",
-                repo_type="model",
-            )
+            upload_kwargs: Dict[str, Any] = {
+                "folder_path": str(target_dir),
+                "repo_id": self.hf_repo_id,
+                "path_in_repo": f"{self.hf_path_in_repo}/{tag}",
+                "repo_type": "model",
+            }
+            if tag == "latest":
+                upload_kwargs["delete_patterns"] = "*"
+            api.upload_folder(**upload_kwargs)
 
         return target_dir
+
+    @staticmethod
+    def load_resume_state(ckpt_dir: Optional[Any]) -> Optional[Dict[str, Any]]:
+        """Loads resume_state.pt from a checkpoint directory if present, else returns None."""
+        if not ckpt_dir:
+            return None
+        state_path = Path(ckpt_dir) / "resume_state.pt"
+        if not state_path.exists():
+            return None
+        return torch.load(state_path, map_location="cpu", weights_only=False)
 
     def restore_checkpoint(self, tag: str = "latest") -> Optional[Path]:
         local_candidate = self.local_ckpt_dir / tag
@@ -551,6 +572,83 @@ def run_evaluation(
     return metrics, predictions
 
 
+class _DeterministicEpochSubset(Dataset):
+    """Map-style dataset view over a deterministic per-epoch index slice for O(1) resume."""
+
+    def __init__(self, dataset: Any, indices: List[int]) -> None:
+        self.dataset = dataset
+        self.indices = indices
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, idx: int):
+        return self.dataset[self.indices[idx]]
+
+
+def _capture_rng_state() -> Dict[str, Any]:
+    state: Dict[str, Any] = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _restore_rng_state(state: Optional[Dict[str, Any]]) -> None:
+    if not state:
+        return
+    if "python" in state:
+        random.setstate(state["python"])
+    if "numpy" in state:
+        np.random.set_state(state["numpy"])
+    if "torch" in state:
+        torch.set_rng_state(state["torch"])
+    if torch.cuda.is_available() and "cuda" in state:
+        try:
+            torch.cuda.set_rng_state_all(state["cuda"])
+        except Exception:
+            pass
+
+
+def _move_optimizer_state_to_device(optimizer) -> None:
+    for group in optimizer.param_groups:
+        for p in group["params"]:
+            st = optimizer.state.get(p)
+            if not st:
+                continue
+            for k, v in list(st.items()):
+                if isinstance(v, torch.Tensor) and k != "step":
+                    st[k] = v.to(device=p.device)
+
+
+def _validate_resume_fingerprint(
+    saved_fp: Optional[Dict[str, Any]],
+    current_fp: Optional[Dict[str, Any]],
+    saved_stage: Optional[str],
+    current_stage: str,
+    allow_mismatch: bool = False,
+) -> None:
+    if allow_mismatch:
+        return
+    if saved_stage and saved_stage != current_stage:
+        raise ValueError(
+            f"Resume stage mismatch: checkpoint is for stage '{saved_stage}', "
+            f"but current trainer is running stage '{current_stage}'."
+        )
+    if not saved_fp or not current_fp:
+        return
+    for key in ("effective_batch_size", "model", "exp"):
+        if key in saved_fp and key in current_fp and saved_fp[key] != current_fp[key]:
+            raise ValueError(
+                f"Resume config mismatch on '{key}': checkpoint has {saved_fp[key]!r}, "
+                f"current run has {current_fp[key]!r}. Use a separate checkpoint_namespace "
+                "or pass --allow_mismatched_resume."
+            )
+
+
 class CrossVQATrainer:
     """
     End-to-end trainer orchestrating Z0/B1–B5 and M1–M3 optimization,
@@ -615,6 +713,31 @@ class CrossVQATrainer:
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
 
+    def _save_checkpoint(
+        self,
+        tag: str,
+        trainer_state: Dict[str, Any],
+        resume_state: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if self.checkpoint_manager is None:
+            return
+        sig_params = inspect.signature(self.checkpoint_manager.save).parameters
+        if "resume_state" in sig_params:
+            self.checkpoint_manager.save(
+                self.model,
+                tag=tag,
+                trainer_state=trainer_state,
+                resume_state=resume_state,
+            )
+        else:
+            target_dir = self.checkpoint_manager.save(
+                self.model,
+                tag=tag,
+                trainer_state=trainer_state,
+            )
+            if resume_state is not None and tag == "latest" and target_dir is not None:
+                torch.save(resume_state, Path(target_dir) / "resume_state.pt")
+
     def fit(
         self,
         train_dataset,
@@ -629,6 +752,11 @@ class CrossVQATrainer:
         save_every_steps: Optional[int] = None,
         estimated_batches_per_epoch: Optional[int] = None,
         seed: int = 42,
+        resume_from: Optional[str] = None,
+        stage_name: str = "main",
+        config_fingerprint: Optional[Dict[str, Any]] = None,
+        save_optimizer_state: bool = True,
+        allow_mismatched_resume: bool = False,
     ) -> Dict[str, Any]:
         collator = CrossVQADataCollator(
             self.processor,
@@ -648,24 +776,9 @@ class CrossVQATrainer:
             if (is_map_style and torch.cuda.is_available() and sys.platform != "win32")
             else 0
         )
-        dl_kwargs: Dict[str, Any] = {
-            "batch_size": batch_size,
-            "collate_fn": collator,
-            "pin_memory": torch.cuda.is_available(),
-            "num_workers": eff_workers,
-        }
-        if is_map_style:
-            dl_gen = torch.Generator()
-            dl_gen.manual_seed(int(seed))
-            dl_kwargs["shuffle"] = True
-            dl_kwargs["generator"] = dl_gen
-        if eff_workers > 0:
-            dl_kwargs["prefetch_factor"] = 2
-
-        dataloader = DataLoader(train_dataset, **dl_kwargs)
 
         try:
-            batches_per_epoch = len(dataloader)
+            batches_per_epoch = math.ceil(len(train_dataset) / max(1, int(batch_size)))
         except TypeError:
             batches_per_epoch = estimated_batches_per_epoch or max_steps_per_epoch or 1000
         if max_steps_per_epoch is not None:
@@ -686,23 +799,127 @@ class CrossVQATrainer:
         global_opt_step = 0
         total_micro_steps = max(1, batches_per_epoch * epochs)
         micro_step_idx = 0
+        start_epoch = 1
+        resume_skip_samples = 0
+
+        if resume_from:
+            r_state = CheckpointManager.load_resume_state(resume_from)
+            if r_state is None:
+                print(
+                    f"Notice: No resume_state.pt found in '{resume_from}'; "
+                    "falling back to weight-only warm start from Epoch 1."
+                )
+            else:
+                _validate_resume_fingerprint(
+                    saved_fp=r_state.get("config_fingerprint"),
+                    current_fp=config_fingerprint,
+                    saved_stage=r_state.get("stage"),
+                    current_stage=stage_name,
+                    allow_mismatch=allow_mismatched_resume,
+                )
+                optimizer.load_state_dict(r_state["optimizer_state_dict"])
+                _move_optimizer_state_to_device(optimizer)
+                scheduler.load_state_dict(r_state["scheduler_state_dict"])
+                if self.align_loss_fn is not None and hasattr(self.align_loss_fn, "load_queue_state"):
+                    self.align_loss_fn.load_queue_state(r_state.get("align_queue_state"))
+                best_score = float(r_state.get("best_score", -1.0))
+                best_metrics = dict(r_state.get("best_metrics", {}))
+                global_opt_step = int(r_state.get("opt_step", 0))
+                micro_step_idx = int(r_state.get("micro_step_idx", 0))
+                saved_epoch = int(r_state.get("epoch", 1))
+                epoch_completed = bool(r_state.get("epoch_completed", False))
+                if epoch_completed:
+                    start_epoch = saved_epoch + 1
+                    resume_skip_samples = 0
+                else:
+                    start_epoch = saved_epoch
+                    resume_skip_samples = int(r_state.get("samples_seen_in_epoch", 0))
+                _restore_rng_state(r_state.get("rng_state"))
+                print(
+                    f"Resumed stage '{stage_name}' from epoch={start_epoch}/{epochs}, "
+                    f"opt_step={global_opt_step}, skip_samples={resume_skip_samples}, "
+                    f"lr={scheduler.get_last_lr()[0]:.6g}"
+                )
+                if start_epoch > epochs:
+                    print(f"Stage '{stage_name}' already completed ({saved_epoch}/{epochs} epochs). Skipping.")
+                    return {
+                        "epochs": epochs,
+                        "opt_steps": global_opt_step,
+                        "elapsed_sec": 0.0,
+                        "best_metrics": best_metrics,
+                        "skipped_already_completed": True,
+                    }
+
+        def _build_resume_payload(ep: int, samples_seen: int, ep_done: bool) -> Optional[Dict[str, Any]]:
+            if not save_optimizer_state:
+                return None
+            payload: Dict[str, Any] = {
+                "stage": stage_name,
+                "epoch": ep,
+                "epoch_completed": ep_done,
+                "samples_seen_in_epoch": samples_seen,
+                "opt_step": global_opt_step,
+                "micro_step_idx": micro_step_idx,
+                "best_score": best_score,
+                "best_metrics": dict(best_metrics),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "rng_state": _capture_rng_state(),
+                "config_fingerprint": dict(config_fingerprint or {}),
+            }
+            if self.align_loss_fn is not None and hasattr(self.align_loss_fn, "get_queue_state"):
+                payload["align_queue_state"] = self.align_loss_fn.get_queue_state()
+            return payload
 
         start_time = time.time()
-        for epoch in range(1, epochs + 1):
-            if hasattr(train_dataset, "set_epoch"):
-                train_dataset.set_epoch(epoch - 1)
+        for epoch in range(start_epoch, epochs + 1):
+            skip_here = resume_skip_samples if epoch == start_epoch else 0
+            samples_seen_in_epoch = skip_here
+            epoch_steps = (skip_here // max(1, int(batch_size))) if skip_here > 0 else 0
+
+            dl_kwargs: Dict[str, Any] = {
+                "batch_size": batch_size,
+                "shuffle": False,
+                "collate_fn": collator,
+                "pin_memory": torch.cuda.is_available(),
+                "num_workers": eff_workers,
+            }
+            if eff_workers > 0:
+                dl_kwargs["prefetch_factor"] = 2
+
+            if is_map_style:
+                perm_gen = torch.Generator()
+                perm_gen.manual_seed(int(seed) + (epoch - 1) * 1009)
+                perm = torch.randperm(len(train_dataset), generator=perm_gen).tolist()
+                epoch_ds = _DeterministicEpochSubset(train_dataset, perm[skip_here:])
+                dataloader = DataLoader(epoch_ds, **dl_kwargs)
+            else:
+                manual_skip = False
+                if hasattr(train_dataset, "set_epoch"):
+                    try:
+                        train_dataset.set_epoch(epoch - 1, skip_samples=skip_here)
+                    except TypeError:
+                        train_dataset.set_epoch(epoch - 1)
+                        manual_skip = skip_here > 0
+                elif skip_here > 0:
+                    manual_skip = True
+                if manual_skip:
+                    dataloader = DataLoader(itertools.islice(train_dataset, skip_here, None), **dl_kwargs)
+                else:
+                    dataloader = DataLoader(train_dataset, **dl_kwargs)
+
             self.model.train()
             optimizer.zero_grad()
             acc_total, acc_gen, acc_align, acc_gate, acc_router_acc = 0.0, 0.0, 0.0, 0.0, 0.0
             micro_in_window = 0
-            epoch_steps = 0
 
             pbar = tqdm(
                 dataloader,
                 desc=f"Epoch {epoch}/{epochs}",
-                total=max_steps_per_epoch,
+                total=max_steps_per_epoch or batches_per_epoch,
+                initial=epoch_steps,
             )
-            for step, batch in enumerate(pbar):
+            for batch in pbar:
                 if max_steps_per_epoch is not None and epoch_steps >= max_steps_per_epoch:
                     break
 
@@ -715,6 +932,7 @@ class CrossVQATrainer:
                 domain_ids = batch.get("domain_ids")
                 sample_weights = batch.get("sample_weights")
                 model_inputs = _prepare_model_inputs(batch, self.device)
+                batch_n = int(model_inputs["input_ids"].shape[0]) if "input_ids" in model_inputs else int(batch_size)
 
                 if forced_domain_id is not None and domain_ids is not None:
                     forced_tensor = torch.full_like(domain_ids, int(forced_domain_id))
@@ -751,8 +969,9 @@ class CrossVQATrainer:
                 micro_in_window += 1
                 epoch_steps += 1
                 micro_step_idx += 1
+                samples_seen_in_epoch += batch_n
 
-                hit_boundary = (step + 1) % self.gradient_accumulation_steps == 0
+                hit_boundary = micro_in_window >= self.gradient_accumulation_steps
                 hit_end = max_steps_per_epoch is not None and epoch_steps >= max_steps_per_epoch
                 if hit_boundary or hit_end:
                     if self.max_grad_norm > 0:
@@ -788,10 +1007,14 @@ class CrossVQATrainer:
                         and save_every_steps is not None
                         and global_opt_step % save_every_steps == 0
                     ):
-                        self.checkpoint_manager.save(
-                            self.model,
+                        self._save_checkpoint(
                             tag="latest",
                             trainer_state={"epoch": epoch, "opt_step": global_opt_step},
+                            resume_state=_build_resume_payload(
+                                ep=epoch,
+                                samples_seen=samples_seen_in_epoch,
+                                ep_done=False,
+                            ),
                         )
 
             # Flush remainder at end of epoch
@@ -807,12 +1030,26 @@ class CrossVQATrainer:
             val_metrics = eval_fn() if eval_fn is not None else {}
             if self.checkpoint_manager is not None:
                 state = {"epoch": epoch, "opt_step": global_opt_step, "val_metrics": val_metrics}
-                self.checkpoint_manager.save(self.model, tag="latest", trainer_state=state)
                 score = float(val_metrics.get(monitor_metric, 0.0))
-                if not val_metrics or score >= best_score:
+                is_best = (not val_metrics) or (score >= best_score)
+                if is_best:
                     best_score = score
                     best_metrics = dict(val_metrics)
-                    self.checkpoint_manager.save(self.model, tag="best", trainer_state=state)
+                self._save_checkpoint(
+                    tag="latest",
+                    trainer_state=state,
+                    resume_state=_build_resume_payload(
+                        ep=epoch,
+                        samples_seen=0,
+                        ep_done=True,
+                    ),
+                )
+                if is_best:
+                    self._save_checkpoint(
+                        tag="best",
+                        trainer_state=state,
+                        resume_state=None,
+                    )
 
         elapsed_sec = round(time.time() - start_time, 2)
         return {

@@ -13,10 +13,12 @@ from pathlib import Path
 import torch
 
 from _common import (
+    apply_training_overrides,
     ensure_repo_root,
     evaluate_both_domains,
     get_git_sha,
     load_yaml,
+    resolve_checkpoint_paths,
     resolve_hf_token,
     set_seed,
 )
@@ -41,7 +43,12 @@ def main() -> None:
     parser.add_argument("--exp", required=True, choices=["M1", "M2", "M3"])
     parser.add_argument("--model", default="smolvlm_500m", choices=["smolvlm_500m", "smolvlm_base", "qwen2_vl_2b"])
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--hardware_profile", default="auto", choices=["auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb", "cpu"])
+    parser.add_argument("--hardware_profile", default="auto")
+    parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=None)
+    parser.add_argument("--eval_batch_size", type=int, default=None)
+    parser.add_argument("--learning_rate", type=float, default=None)
+    parser.add_argument("--checkpoint_namespace", default=None)
     parser.add_argument("--align_type", default=None, choices=["none", "mmd", "infonce"])
     parser.add_argument("--align_adapter_rank", type=int, default=None)
     parser.add_argument("--lambda_align", type=float, default=None)
@@ -54,8 +61,10 @@ def main() -> None:
     parser.add_argument("--hf_token", default=None)
     parser.add_argument("--gdrive_backup_dir", default=None)
     parser.add_argument("--resume_from_hub", action="store_true")
+    parser.add_argument("--allow_mismatched_resume", action="store_true")
+    parser.add_argument("--no_save_optimizer_state", action="store_true")
     parser.add_argument("--skip_stage1", action="store_true", help="Reuse cached M_stage1_doc adapter if available")
-    parser.add_argument("--save_every_steps", type=int, default=250)
+    parser.add_argument("--save_every_steps", type=int, default=None)
     parser.add_argument("--max_train_steps", type=int, default=None)
     parser.add_argument("--max_eval_samples", type=int, default=None)
     args = parser.parse_args()
@@ -70,6 +79,15 @@ def main() -> None:
     model_type = model_info["model_type"]
     tr_cfg = m_cfg["training"]
     method_cfg = m_cfg["methods"][args.exp]
+    batch_size, grad_accum, eval_batch_size, lr = apply_training_overrides(hw, tr_cfg, args)
+    effective_batch_size = batch_size * grad_accum
+    ckpt_ns = (
+        args.checkpoint_namespace
+        if args.checkpoint_namespace is not None
+        else m_cfg.get("checkpoints", {}).get("checkpoint_namespace", "")
+    )
+    save_every_cfg = int(m_cfg.get("checkpoints", {}).get("save_every_steps", 64))
+    save_every_arg = args.save_every_steps if args.save_every_steps is not None else save_every_cfg
 
     align_type = args.align_type or method_cfg.get("align_type", "none")
     lambda_align = args.lambda_align if args.lambda_align is not None else float(method_cfg.get("lambda_align", 0.0))
@@ -82,16 +100,16 @@ def main() -> None:
 
     ocr_tag = "_ocr" if args.include_ocr else ""
     align_tag = f"_{align_type}" if (args.exp in ("M2", "M3") and align_type == "infonce") else ""
-    if args.few_shot_pct < 100:
-        run_rel = (
-            Path(m_cfg["runs_root"]) / args.model / "few_shot"
-            / f"{args.exp}{align_tag}{ocr_tag}_pct_{args.few_shot_pct:02d}" / f"seed_{args.seed}"
-        )
-        hf_subpath = f"alt_three_splits/{args.model}/few_shot/{args.exp}{align_tag}{ocr_tag}_pct_{args.few_shot_pct:02d}/seed_{args.seed}"
-    else:
-        exp_dir = METHOD_FOLDER_MAP[args.exp] + align_tag + ocr_tag
-        run_rel = Path(m_cfg["runs_root"]) / args.model / exp_dir / f"seed_{args.seed}"
-        hf_subpath = f"alt_three_splits/{args.model}/{exp_dir}/seed_{args.seed}"
+    exp_dir = METHOD_FOLDER_MAP[args.exp] + align_tag + ocr_tag
+    run_rel, hf_subpath = resolve_checkpoint_paths(
+        runs_root=m_cfg["runs_root"],
+        model=args.model,
+        exp_dir=exp_dir,
+        seed=args.seed,
+        checkpoint_namespace=ckpt_ns,
+        few_shot_pct=args.few_shot_pct,
+        few_shot_tag=f"{args.exp}{align_tag}{ocr_tag}",
+    )
     run_rel.mkdir(parents=True, exist_ok=True)
 
     hf_token = resolve_hf_token(args.hf_token)
@@ -105,9 +123,15 @@ def main() -> None:
         private=bool(m_cfg["checkpoints"].get("hf_private", True)),
     )
 
-    stage1_hf_subpath = f"alt_three_splits/{args.model}/M_stage1_doc{ocr_tag}/seed_{args.seed}"
+    stage1_rel, stage1_hf_subpath = resolve_checkpoint_paths(
+        runs_root=m_cfg["runs_root"],
+        model=args.model,
+        exp_dir=f"M_stage1_doc{ocr_tag}",
+        seed=args.seed,
+        checkpoint_namespace=ckpt_ns,
+    )
     stage1_mgr = CheckpointManager(
-        local_ckpt_dir=str(Path(m_cfg["runs_root"]) / args.model / f"M_stage1_doc{ocr_tag}" / f"seed_{args.seed}" / "checkpoints"),
+        local_ckpt_dir=str(stage1_rel / "checkpoints"),
         hf_repo_id=args.hf_ckpt_repo,
         hf_path_in_repo=stage1_hf_subpath,
         hf_token=hf_token,
@@ -120,6 +144,9 @@ def main() -> None:
         restored = ckpt_mgr.restore_checkpoint("latest")
         if restored is not None:
             resume_ckpt = str(restored)
+    resumed_state = CheckpointManager.load_resume_state(resume_ckpt) if resume_ckpt else None
+    resumed_stage = resumed_state.get("stage") if resumed_state else None
+    final_stage_name = "stage3_transfer" if args.exp == "M3" else "stage2_transfer"
 
     use_4bit = bool(hw.get("load_in_4bit", tr_cfg["load_in_4bit"]) and model_info.get("allow_4bit", True))
     model, processor = build_vlm_model_and_processor(
@@ -145,7 +172,16 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     few_shot_manifest = fs_cfg["few_shot_manifest_path"]
     use_streaming = args.local_data_dir is None
-    save_every = args.save_every_steps if args.save_every_steps and args.save_every_steps > 0 else None
+    save_every = save_every_arg if save_every_arg and save_every_arg > 0 else None
+    base_fingerprint = {
+        "exp": args.exp,
+        "model": args.model,
+        "seed": args.seed,
+        "effective_batch_size": effective_batch_size,
+        "lr": lr,
+        "lora_r": tr_cfg["lora_r"],
+        "checkpoint_namespace": ckpt_ns,
+    }
 
     def _eval_val():
         res = evaluate_both_domains(
@@ -157,7 +193,7 @@ def main() -> None:
             device=device,
             include_ocr=args.include_ocr,
             max_new_tokens=tr_cfg["max_new_tokens"],
-            eval_batch_size=hw["eval_batch_size"],
+            eval_batch_size=eval_batch_size,
             max_eval_samples=args.max_eval_samples,
             local_data_dir=args.local_data_dir,
         )
@@ -170,6 +206,13 @@ def main() -> None:
         print(f"Loading cached Stage-1 DocVQA Dual-LoRA from {stage1_restored}")
         model.load_pretrained(str(stage1_restored))
     elif resume_ckpt is None:
+        s1_resume_dir = None
+        if args.resume_from_hub:
+            s1_latest = stage1_mgr.restore_checkpoint("latest")
+            if s1_latest is not None:
+                print(f"Resuming Stage-1 DocVQA Dual-LoRA from {s1_latest}")
+                model.load_pretrained(str(s1_latest))
+                s1_resume_dir = str(s1_latest)
         print(f"\n=== [{args.exp}] Stage 1: DocVQA Source Adaptation (A_doc + Router) ===")
         model.set_trainable_stage("doc_only")
         model.print_trainable_parameters()
@@ -180,10 +223,10 @@ def main() -> None:
             run_dir=str(run_rel / "stage1_doc"),
             model_type=model_type,
             device=device,
-            lr=tr_cfg["learning_rate"],
+            lr=lr,
             weight_decay=tr_cfg["weight_decay"],
             warmup_ratio=tr_cfg["warmup_ratio"],
-            gradient_accumulation_steps=hw["gradient_accumulation_steps"],
+            gradient_accumulation_steps=grad_accum,
             max_grad_norm=tr_cfg["max_grad_norm"],
             optim_name=hw["optim"],
             include_ocr=args.include_ocr,
@@ -193,11 +236,16 @@ def main() -> None:
         s1_trainer.fit(
             train_dataset=doc_train,
             epochs=int(method_cfg.get("stage1_doc_epochs", 1)),
-            batch_size=hw["per_device_train_batch_size"],
+            batch_size=batch_size,
             max_steps_per_epoch=args.max_train_steps,
             forced_domain_id=0,
             save_every_steps=save_every,
             seed=args.seed,
+            resume_from=s1_resume_dir,
+            stage_name="stage1_doc",
+            config_fingerprint=base_fingerprint,
+            save_optimizer_state=not args.no_save_optimizer_state,
+            allow_mismatched_resume=args.allow_mismatched_resume,
         )
 
     # Alignment loss initialization (M2 / M3)
@@ -211,7 +259,7 @@ def main() -> None:
         align_loss_fn = CrossDomainInfoNCELoss(queue_size=int(method_cfg.get("queue_size", 256)))
 
     # Stage 2 (M3 Only): Curriculum Pseudo-Domain Homography Bridge
-    if args.exp == "M3":
+    if args.exp == "M3" and resumed_stage != final_stage_name:
         print("\n=== [M3] Stage 2: Curriculum Pseudo-Domain Homography Bridge ===")
         model.set_trainable_stage("scene_only_frozen_doc")
         doc_train = load_crossvqa_dataset("docvqa", "train", "alt_three_splits", streaming=use_streaming, local_data_dir=args.local_data_dir)
@@ -231,10 +279,10 @@ def main() -> None:
             run_dir=str(run_rel / "stage2_curriculum"),
             model_type=model_type,
             device=device,
-            lr=tr_cfg["learning_rate"],
+            lr=lr,
             weight_decay=tr_cfg["weight_decay"],
             warmup_ratio=tr_cfg["warmup_ratio"],
-            gradient_accumulation_steps=hw["gradient_accumulation_steps"],
+            gradient_accumulation_steps=grad_accum,
             max_grad_norm=tr_cfg["max_grad_norm"],
             optim_name=hw["optim"],
             include_ocr=args.include_ocr,
@@ -245,15 +293,21 @@ def main() -> None:
             curriculum_transform=curr_transform,
             checkpoint_manager=ckpt_mgr,
         )
+        s2_resume = resume_ckpt if (resume_ckpt and resumed_stage == "stage2_curriculum") else None
         s2_trainer.fit(
             train_dataset=paired_curr,
             epochs=int(method_cfg.get("stage2_curriculum_epochs", 1)),
-            batch_size=max(2, hw["per_device_train_batch_size"]),
+            batch_size=max(2, batch_size),
             max_steps_per_epoch=args.max_train_steps,
             curriculum_start=float(method_cfg.get("curriculum_severity_start", 0.2)),
             curriculum_end=float(method_cfg.get("curriculum_severity_end", 1.0)),
             save_every_steps=save_every,
             seed=args.seed + 100,
+            resume_from=s2_resume,
+            stage_name="stage2_curriculum",
+            config_fingerprint=base_fingerprint,
+            save_optimizer_state=not args.no_save_optimizer_state,
+            allow_mismatched_resume=args.allow_mismatched_resume,
         )
 
     # Final Transfer Stage: Target TextVQA Adaptation (with frozen A_doc + Paired Alignment)
@@ -278,10 +332,10 @@ def main() -> None:
         run_dir=str(run_rel),
         model_type=model_type,
         device=device,
-        lr=tr_cfg["learning_rate"],
+        lr=lr,
         weight_decay=tr_cfg["weight_decay"],
         warmup_ratio=tr_cfg["warmup_ratio"],
-        gradient_accumulation_steps=hw["gradient_accumulation_steps"],
+        gradient_accumulation_steps=grad_accum,
         max_grad_norm=tr_cfg["max_grad_norm"],
         optim_name=hw["optim"],
         include_ocr=args.include_ocr,
@@ -291,24 +345,39 @@ def main() -> None:
         lambda_gate=lambda_gate,
         checkpoint_manager=ckpt_mgr,
     )
+    final_resume = resume_ckpt if (resume_ckpt and (resumed_stage is None or resumed_stage == final_stage_name)) else None
     summary = final_trainer.fit(
         train_dataset=paired_ds,
         epochs=transfer_epochs,
-        batch_size=max(2, hw["per_device_train_batch_size"]),
+        batch_size=max(2, batch_size),
         max_steps_per_epoch=args.max_train_steps,
         eval_fn=_eval_val,
         monitor_metric="selection_score",
         save_every_steps=save_every,
         seed=args.seed,
+        resume_from=final_resume,
+        stage_name=final_stage_name,
+        config_fingerprint=base_fingerprint,
+        save_optimizer_state=not args.no_save_optimizer_state,
+        allow_mismatched_resume=args.allow_mismatched_resume,
     )
 
     card_cfg = {
         "experiment": {"id": f"{args.exp}_{args.model}{align_tag}{ocr_tag}_seed{args.seed}", "exp": args.exp, "seed": args.seed, "git_sha": get_git_sha()},
         "data": {"regime": "alt_three_splits", "revision": "three-splits", "few_shot_pct": args.few_shot_pct, "include_ocr": args.include_ocr},
         "model": {"backbone": model_info["repo_id"], "architecture_mode": "dual_lora", "lora_r": tr_cfg["lora_r"], "lora_alpha": tr_cfg["lora_alpha"], "align_type": align_type, "align_adapter_rank": align_adapter_rank, "lambda_align": lambda_align, "lambda_gate": lambda_gate},
-        "training": {"hardware_profile": hw["name"], "epochs": transfer_epochs, "lr": tr_cfg["learning_rate"], "elapsed_sec": summary["elapsed_sec"]},
+        "training": {
+            "hardware_profile": hw["name"],
+            "checkpoint_namespace": ckpt_ns,
+            "per_device_train_batch_size": max(2, batch_size),
+            "gradient_accumulation_steps": grad_accum,
+            "effective_batch_size": max(2, batch_size) * grad_accum,
+            "epochs": transfer_epochs,
+            "lr": lr,
+            "elapsed_sec": summary["elapsed_sec"],
+        },
     }
-    save_run_card(str(run_rel), card_cfg, summary["best_metrics"])
+    save_run_card(str(run_rel), card_cfg, summary["best_metrics"], extra_meta={"resumed_from": final_resume})
     print(f"\nCompleted {args.exp} ({args.model}, seed={args.seed}). Artifacts saved to {run_rel}")
 
 

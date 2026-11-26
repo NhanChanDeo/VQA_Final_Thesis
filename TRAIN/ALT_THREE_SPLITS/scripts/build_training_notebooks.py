@@ -310,7 +310,7 @@ if _gdrive_dir:
     print(f"Mirrored lightweight run logs to {drive_runs}")
 
 # Optional unattended GitHub push for lightweight JSON/YAML/PNG run artifacts
-PUSH_LOGS_TO_GITHUB = False  # Set True when ready to commit logs from Colab
+PUSH_LOGS_TO_GITHUB = True  # Set True when ready to commit logs from Colab
 if PUSH_LOGS_TO_GITHUB:
     status = subprocess.run(
         ["git", "status", "--porcelain", "TRAIN/ALT_THREE_SPLITS/runs/"],
@@ -340,7 +340,7 @@ import time
 
 AUTO_DISCONNECT = True            # Automatically release Colab GPU after delay
 DISCONNECT_DELAY_SEC = 300        # 5-minute grace window before runtime.unassign()
-REQUIRE_EXPLICIT_CONFIRM = False  # True -> manual y/N prompt (blocks unattended runs!)
+REQUIRE_EXPLICIT_CONFIRM = True  # True -> manual y/N prompt (blocks unattended runs!)
 
 _prep = STAGE_TIMINGS.get("prep_sec", 0.0) + STAGE_TIMINGS.get("auth_sec", 0.0) + STAGE_TIMINGS.get("snapshot_sec", 0.0)
 _train = STAGE_TIMINGS.get("train_sec", 0.0)
@@ -509,7 +509,7 @@ MODEL_KEY = "smolvlm_500m"       # Primary: "smolvlm_500m" | Scale 2B: "smolvlm_
 HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42                        # Seeds: 42, 123, 999
 INCLUDE_OCR = False              # False = Track A (OCR-free primary); True = Track B ablation
-SAVE_EVERY_STEPS = 250           # Mid-epoch checkpoint frequency (resilience against Colab disconnects)
+SAVE_EVERY_STEPS = 64           # Mid-epoch checkpoint frequency (resilience against Colab disconnects)
 MAX_TRAIN_STEPS = None           # Set e.g. 20 for smoke test
 MAX_EVAL_SAMPLES = None
 
@@ -566,7 +566,7 @@ import torch
 MODEL_KEY = "smolvlm_500m"       # Primary: "smolvlm_500m" | Scale 2B: "smolvlm_base" | Cross-Arch: "qwen2_vl_2b"
 HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
-SAVE_EVERY_STEPS = 250
+SAVE_EVERY_STEPS = 64
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None
 
@@ -622,7 +622,7 @@ EXP = "B4"                       # "B4" (Doc->Text) or "B5" (Text->Doc)
 MODEL_KEY = "smolvlm_500m"       # Primary: "smolvlm_500m" | Scale 2B: "smolvlm_base" | Cross-Arch: "qwen2_vl_2b"
 HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
-SAVE_EVERY_STEPS = 250
+SAVE_EVERY_STEPS = 64
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None
 
@@ -681,7 +681,7 @@ SEED = 42
 ALIGN_TYPE = "mmd"               # "mmd" (default) or "infonce" (ablation)
 INCLUDE_OCR = False              # True for Track B Given-OCR ablation on M2
 SKIP_STAGE1_IF_CACHED = True     # Reuses M_stage1_doc checkpoint across M1/M2/M3
-SAVE_EVERY_STEPS = 250
+SAVE_EVERY_STEPS = 64
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None
 
@@ -743,7 +743,7 @@ HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_
 SEED = 42
 FRACTIONS = [1, 5, 10, 25]
 METHODS = ["B1", "B4", "M2"]
-SAVE_EVERY_STEPS = 250
+SAVE_EVERY_STEPS = 64
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None
 

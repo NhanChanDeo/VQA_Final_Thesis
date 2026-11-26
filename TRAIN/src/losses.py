@@ -6,7 +6,7 @@ Proposed CrossVQA M2 Alignment Losses & Phase A9 Domain Discrepancy Metrics:
 - compute_rkhs_mmd & compute_proxy_a_distance: Phase A9 evaluation metrics
 """
 
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
@@ -40,6 +40,22 @@ class FeatureQueue:
 
     def __len__(self) -> int:
         return 0 if self._buffer is None else int(self._buffer.shape[0])
+
+    def state_dict(self) -> Dict[str, Any]:
+        return {
+            "max_size": self.max_size,
+            "buffer": self._buffer.clone() if self._buffer is not None else None,
+        }
+
+    def load_state_dict(self, state: Optional[Dict[str, Any]]) -> None:
+        if not state:
+            self._buffer = None
+            return
+        buf = state.get("buffer")
+        if buf is None:
+            self._buffer = None
+        else:
+            self._buffer = buf.detach().float().cpu()[-self.max_size :]
 
 
 def _rbf_kernel_matrix(
@@ -119,6 +135,18 @@ class MultiKernelRBFMMDLoss(nn.Module):
 
         return loss
 
+    def get_queue_state(self) -> Dict[str, Any]:
+        return {
+            "doc_queue": self.doc_queue.state_dict(),
+            "scene_queue": self.scene_queue.state_dict(),
+        }
+
+    def load_queue_state(self, state: Optional[Dict[str, Any]]) -> None:
+        if not state:
+            return
+        self.doc_queue.load_state_dict(state.get("doc_queue"))
+        self.scene_queue.load_state_dict(state.get("scene_queue"))
+
 
 class CrossDomainInfoNCELoss(nn.Module):
     """
@@ -179,6 +207,18 @@ class CrossDomainInfoNCELoss(nn.Module):
         if not losses:
             return pooled_vis.sum() * 0.0
         return torch.stack(losses).mean()
+
+    def get_queue_state(self) -> Dict[str, Any]:
+        return {
+            "doc_queue": self.doc_queue.state_dict(),
+            "scene_queue": self.scene_queue.state_dict(),
+        }
+
+    def load_queue_state(self, state: Optional[Dict[str, Any]]) -> None:
+        if not state:
+            return
+        self.doc_queue.load_state_dict(state.get("doc_queue"))
+        self.scene_queue.load_state_dict(state.get("scene_queue"))
 
 
 def compute_rkhs_mmd(
