@@ -385,7 +385,7 @@ def test_metrics_hardware_checkpoint_and_trainer_e2e(tmp_path):
     hw_cpu = resolve_hardware_profile("auto")
     assert hw_cpu["name"] == "cpu"
     hw_l4 = resolve_hardware_profile("l4_24gb")
-    assert hw_l4["dtype"] == "bf16" and hw_l4["per_device_train_batch_size"] == 4 and hw_l4["gradient_accumulation_steps"] == 16
+    assert hw_l4["dtype"] == "bf16" and hw_l4["per_device_train_batch_size"] == 16 and hw_l4["gradient_accumulation_steps"] == 4
     hw_a100 = resolve_hardware_profile("a100_40gb")
     assert hw_a100["dtype"] == "bf16" and hw_a100["per_device_train_batch_size"] == 16 and hw_a100["gradient_accumulation_steps"] == 4
     hw_g4 = resolve_hardware_profile("g4_96gb")
@@ -874,7 +874,7 @@ def test_hardware_profiles_effective_bs64_parity():
         assert code_p["smolvlm_longest_edge"] == 1536
         assert yaml_p["gradient_checkpointing"] == code_p["gradient_checkpointing"]
         assert yaml_p["optim"] == code_p["optim"]
-        expected_gc = prof_name == "t4_16gb"
+        expected_gc = prof_name in ("l4_24gb", "t4_16gb")
         assert yaml_p["gradient_checkpointing"] is expected_gc
         assert yaml_p["per_device_train_batch_size"] * yaml_p["gradient_accumulation_steps"] == 64
 
