@@ -1265,3 +1265,11 @@ def test_mega_batch_resolution_bucketing_and_fused_adamw(tmp_path):
     )
     opt = trainer._build_optimizer()
     assert isinstance(opt, torch.optim.AdamW)
+
+    # Cross-optimizer state format guard (e.g. PagedAdamW8bit 'state1' -> torch.optim.AdamW)
+    from TRAIN.src.trainer import _is_optimizer_state_compatible
+
+    fake_bnb_state = {"state": {0: {"state1": torch.zeros(2), "state2": torch.zeros(2)}}}
+    assert _is_optimizer_state_compatible(opt, fake_bnb_state) is False
+    valid_adam_state = {"state": {0: {"exp_avg": torch.zeros(2), "exp_avg_sq": torch.zeros(2)}}}
+    assert _is_optimizer_state_compatible(opt, valid_adam_state) is True

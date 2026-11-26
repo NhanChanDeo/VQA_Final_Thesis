@@ -666,6 +666,23 @@ def _move_optimizer_state_to_device(optimizer) -> None:
                     st[k] = v.to(device=p.device)
 
 
+def _is_optimizer_state_compatible(optimizer: Any, saved_opt_state: Optional[Dict[str, Any]]) -> bool:
+    if not saved_opt_state or not isinstance(saved_opt_state, dict):
+        return False
+    state_map = saved_opt_state.get("state")
+    if not isinstance(state_map, dict) or not state_map:
+        return True
+    sample_entry = next(iter(state_map.values()))
+    if not isinstance(sample_entry, dict):
+        return False
+    is_torch_adam = type(optimizer).__name__ in ("AdamW", "Adam")
+    if is_torch_adam and "exp_avg" not in sample_entry:
+        return False
+    if not is_torch_adam and "state1" not in sample_entry and "exp_avg" in sample_entry:
+        return False
+    return True
+
+
 def _validate_resume_fingerprint(
     saved_fp: Optional[Dict[str, Any]],
     current_fp: Optional[Dict[str, Any]],
@@ -872,8 +889,16 @@ class CrossVQATrainer:
                     current_stage=stage_name,
                     allow_mismatch=allow_mismatched_resume,
                 )
-                optimizer.load_state_dict(r_state["optimizer_state_dict"])
-                _move_optimizer_state_to_device(optimizer)
+                saved_opt = r_state.get("optimizer_state_dict")
+                if _is_optimizer_state_compatible(optimizer, saved_opt):
+                    optimizer.load_state_dict(saved_opt)
+                    _move_optimizer_state_to_device(optimizer)
+                else:
+                    print(
+                        "Notice: Saved optimizer_state_dict format differs from current optimizer "
+                        f"({type(optimizer).__name__}); resetting optimizer momentum while resuming "
+                        "weights, scheduler, and dataset position."
+                    )
                 scheduler.load_state_dict(r_state["scheduler_state_dict"])
                 if self.align_loss_fn is not None and hasattr(self.align_loss_fn, "load_queue_state"):
                     self.align_loss_fn.load_queue_state(r_state.get("align_queue_state"))
