@@ -391,7 +391,7 @@ def test_metrics_hardware_checkpoint_and_trainer_e2e(tmp_path):
     hw_g4 = resolve_hardware_profile("g4_96gb")
     assert hw_g4["dtype"] == "bf16" and hw_g4["load_in_4bit"] is False and hw_g4["per_device_train_batch_size"] == 16 and hw_g4["gradient_accumulation_steps"] == 4
     hw_t4 = resolve_hardware_profile("t4_16gb")
-    assert hw_t4["dtype"] == "fp16" and hw_t4["per_device_train_batch_size"] == 4 and hw_t4["gradient_accumulation_steps"] == 16
+    assert hw_t4["dtype"] == "fp16" and hw_t4["per_device_train_batch_size"] == 8 and hw_t4["gradient_accumulation_steps"] == 8
 
     # End-to-end trainer + CheckpointManager with Drive backup mirror (no network)
     backbone = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
@@ -870,8 +870,12 @@ def test_hardware_profiles_effective_bs64_parity():
         assert yaml_p["per_device_train_batch_size"] == code_p["per_device_train_batch_size"]
         assert yaml_p["gradient_accumulation_steps"] == code_p["gradient_accumulation_steps"]
         assert yaml_p["eval_batch_size"] == code_p["eval_batch_size"]
-        assert yaml_p["smolvlm_longest_edge"] == 2048
-        assert code_p["smolvlm_longest_edge"] == 2048
+        assert yaml_p["smolvlm_longest_edge"] == 1536
+        assert code_p["smolvlm_longest_edge"] == 1536
+        assert yaml_p["gradient_checkpointing"] == code_p["gradient_checkpointing"]
+        assert yaml_p["optim"] == code_p["optim"]
+        expected_gc = prof_name == "t4_16gb"
+        assert yaml_p["gradient_checkpointing"] is expected_gc
         assert yaml_p["per_device_train_batch_size"] * yaml_p["gradient_accumulation_steps"] == 64
 
     for cfg in (base_cfg, m_cfg):
@@ -1206,3 +1210,58 @@ def test_temporary_use_cache_restores_nested_configs():
 
     assert top_cfg.use_cache is False
     assert text_cfg.use_cache is False
+
+
+def test_mega_batch_resolution_bucketing_and_fused_adamw(tmp_path):
+    from TRAIN.src.dataset import extract_dataset_image_areas, mega_batch_bucket_indices
+
+    class _VarResDataset(torch.utils.data.Dataset):
+        def __init__(self, n: int = 18) -> None:
+            self.items = [
+                {
+                    "domain_type": "document_text",
+                    "image": Image.new("RGB", (8 + (i % 6) * 4, 8 + (i % 6) * 4)),
+                    "question": f"q{i}?",
+                    "answers": ["a"],
+                }
+                for i in range(n)
+            ]
+
+        def __len__(self) -> int:
+            return len(self.items)
+
+        def __getitem__(self, idx: int):
+            return self.items[idx]
+
+    ds = _VarResDataset(18)
+    areas = extract_dataset_image_areas(ds)
+    assert areas is not None and len(areas) == 18
+
+    perm = list(range(18))
+    b1 = mega_batch_bucket_indices(perm, areas, batch_size=4, seed=42, mega_batch_mult=4)
+    b2 = mega_batch_bucket_indices(perm, areas, batch_size=4, seed=42, mega_batch_mult=4)
+    assert b1 == b2
+    assert sorted(b1) == list(range(18))
+    # Trailing partial batch (16..17) remains at the end for exact batch-aligned mid-epoch resume
+    assert b1[16:] == [16, 17]
+
+    # PairedDomainDataset + InterleavedCrossVQADataset with bucketing enabled
+    tv_ds = _VarResDataset(10)
+    paired = PairedDomainDataset(ds, tv_ds, seed=42, bucket_batch_size=4)
+    paired.set_epoch(0, skip_samples=0, bucket_batch_size=4)
+    items = list(paired)
+    assert len(items) == 20
+
+    # Fused AdamW option falls back gracefully on CPU
+    model = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    proc = _DummyProcessor(with_chat_template=False)
+    trainer = CrossVQATrainer(
+        model=model,
+        processor=proc,
+        run_dir=str(tmp_path / "run_fused"),
+        model_type="smolvlm",
+        device="cpu",
+        optim_name="adamw_torch_fused",
+    )
+    opt = trainer._build_optimizer()
+    assert isinstance(opt, torch.optim.AdamW)

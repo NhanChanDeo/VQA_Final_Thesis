@@ -8,10 +8,10 @@ Unified streaming and local NVMe dataset loader for CrossVQA:
 import io
 import itertools
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, List, Optional
 import polars as pl
 from PIL import Image
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, get_worker_info
 
 DATASET_REPOS = {
     "docvqa": "gamusa/docvqa-canonical",
@@ -125,13 +125,106 @@ def _iter_shuffled_domain(ds: Any, seed: int, shuffle_buffer: int) -> Iterator[D
     yield from iter(stream_ds)
 
 
-def _iter_shuffled_domain_lazy(ds: Any, seed: int, shuffle_buffer: int):
+def _image_area_from_payload(payload: Any) -> int:
+    if isinstance(payload, Image.Image):
+        return int(payload.width) * int(payload.height)
+    if isinstance(payload, dict):
+        if payload.get("bytes") is not None:
+            with Image.open(io.BytesIO(payload["bytes"])) as im:
+                return int(im.width) * int(im.height)
+        if payload.get("path"):
+            with Image.open(payload["path"]) as im:
+                return int(im.width) * int(im.height)
+    if isinstance(payload, bytes):
+        with Image.open(io.BytesIO(payload)) as im:
+            return int(im.width) * int(im.height)
+    return 0
+
+
+def extract_dataset_image_areas(dataset: Any) -> Optional[List[int]]:
+    """
+    Lazily extracts pixel area (width * height) per sample for a map-style dataset
+    using metadata columns or image header inspection without decoding pixel arrays.
+    """
+    if not _is_map_style_dataset(dataset):
+        return None
+    n = len(dataset)
+    if n == 0:
+        return []
+    try:
+        col_names = list(getattr(dataset, "column_names", []) or [])
+        for w_col, h_col in (("image_width", "image_height"), ("width", "height")):
+            if w_col in col_names and h_col in col_names:
+                widths = dataset[w_col]
+                heights = dataset[h_col]
+                return [int(w) * int(h) for w, h in zip(widths, heights)]
+
+        if hasattr(dataset, "cast_column") and "image" in getattr(dataset, "features", {}):
+            from datasets import Image as HFImage
+
+            raw_ds = dataset.cast_column("image", HFImage(decode=False))
+            return [_image_area_from_payload(p) for p in raw_ds["image"]]
+
+        if isinstance(dataset, (list, tuple)):
+            return [_image_area_from_payload(item.get("image")) for item in dataset]
+
+        return [_image_area_from_payload(dataset[i].get("image")) for i in range(n)]
+    except Exception:
+        return None
+
+
+def mega_batch_bucket_indices(
+    indices: List[int],
+    areas: Optional[List[int]],
+    batch_size: int,
+    seed: int,
+    mega_batch_mult: int = 32,
+) -> List[int]:
+    """
+    Groups shuffled indices into resolution-coherent micro-batches inside mega-batches,
+    then shuffles micro-batch order (keeping any trailing partial batch at the end so
+    mid-epoch resume offsets remain exact multiples of `batch_size`).
+    """
+    import random
+
+    bs = int(batch_size)
+    if bs <= 1 or not areas or len(indices) <= bs:
+        return indices
+
+    n = len(indices)
+    full_end = (n // bs) * bs
+    tail = indices[full_end:]
+    head = indices[:full_end]
+    mega_size = max(bs * max(1, int(mega_batch_mult)), bs)
+
+    micro_batches: List[List[int]] = []
+    for start in range(0, len(head), mega_size):
+        chunk = sorted(head[start : start + mega_size], key=lambda idx: areas[idx], reverse=True)
+        for mb_start in range(0, len(chunk), bs):
+            micro_batches.append(chunk[mb_start : mb_start + bs])
+
+    random.Random(int(seed)).shuffle(micro_batches)
+    out = [idx for mb in micro_batches for idx in mb]
+    if tail:
+        out.extend(tail)
+    return out
+
+
+def _iter_shuffled_domain_lazy(
+    ds: Any,
+    seed: int,
+    shuffle_buffer: int,
+    bucket_batch_size: int = 0,
+    areas: Optional[List[int]] = None,
+):
     """Yields zero-decode callables (lambda: ds[idx]) for map-style datasets so skipping is instant."""
     import random
 
     if _is_map_style_dataset(ds):
         indices = list(range(len(ds)))
         random.Random(seed).shuffle(indices)
+        if bucket_batch_size > 1 and areas is not None:
+            indices = mega_batch_bucket_indices(indices, areas, bucket_batch_size, seed + 77)
         for idx in indices:
             yield (lambda i=idx: ds[i])
         return
@@ -150,6 +243,7 @@ class InterleavedCrossVQADataset(IterableDataset):
         doc_prob: float = 0.5,
         seed: int = 42,
         shuffle_buffer: int = 256,
+        bucket_batch_size: int = 0,
     ) -> None:
         super().__init__()
         self.doc_dataset = doc_dataset
@@ -157,12 +251,30 @@ class InterleavedCrossVQADataset(IterableDataset):
         self.doc_prob = float(doc_prob)
         self.seed = int(seed)
         self.shuffle_buffer = int(shuffle_buffer)
+        self.bucket_batch_size = int(bucket_batch_size)
         self._epoch = 0
         self._skip_samples = 0
+        self._doc_areas: Optional[List[int]] = None
+        self._scene_areas: Optional[List[int]] = None
 
-    def set_epoch(self, epoch: int, skip_samples: int = 0) -> None:
+    def set_epoch(
+        self,
+        epoch: int,
+        skip_samples: int = 0,
+        bucket_batch_size: Optional[int] = None,
+    ) -> None:
         self._epoch = int(epoch)
         self._skip_samples = max(0, int(skip_samples))
+        if bucket_batch_size is not None:
+            self.bucket_batch_size = int(bucket_batch_size)
+
+    def _ensure_areas(self) -> None:
+        if self.bucket_batch_size <= 1:
+            return
+        if self._doc_areas is None:
+            self._doc_areas = extract_dataset_image_areas(self.doc_dataset)
+        if self._scene_areas is None:
+            self._scene_areas = extract_dataset_image_areas(self.scene_dataset)
 
     def __len__(self) -> int:
         if _is_map_style_dataset(self.doc_dataset) and _is_map_style_dataset(self.scene_dataset):
@@ -172,13 +284,23 @@ class InterleavedCrossVQADataset(IterableDataset):
     def __iter__(self) -> Iterator[Dict[str, Any]]:
         import random
 
+        self._ensure_areas()
+        sub_bs = max(1, self.bucket_batch_size // 2) if self.bucket_batch_size > 1 else 0
         ep_seed = self.seed + self._epoch * 1009
         rng = random.Random(ep_seed)
-        doc_it = _iter_shuffled_domain_lazy(self.doc_dataset, ep_seed, self.shuffle_buffer)
-        scene_it = _iter_shuffled_domain_lazy(self.scene_dataset, ep_seed + 1, self.shuffle_buffer)
+        doc_it = _iter_shuffled_domain_lazy(
+            self.doc_dataset, ep_seed, self.shuffle_buffer, bucket_batch_size=sub_bs, areas=self._doc_areas
+        )
+        scene_it = _iter_shuffled_domain_lazy(
+            self.scene_dataset, ep_seed + 1, self.shuffle_buffer, bucket_batch_size=sub_bs, areas=self._scene_areas
+        )
         doc_done = False
         scene_done = False
         remaining_skip = self._skip_samples
+        worker_info = get_worker_info()
+        worker_id = worker_info.id if worker_info is not None else 0
+        num_workers = worker_info.num_workers if worker_info is not None else 1
+        emit_idx = 0
 
         while not (doc_done and scene_done):
             pick_doc = (not doc_done) and (scene_done or rng.random() < self.doc_prob)
@@ -197,7 +319,9 @@ class InterleavedCrossVQADataset(IterableDataset):
             if remaining_skip > 0:
                 remaining_skip -= 1
                 continue
-            yield getter()
+            if num_workers <= 1 or (emit_idx % num_workers) == worker_id:
+                yield getter()
+            emit_idx += 1
 
 
 class PairedDomainDataset(IterableDataset):
@@ -213,6 +337,7 @@ class PairedDomainDataset(IterableDataset):
         max_pairs: Optional[int] = None,
         seed: int = 42,
         shuffle_buffer: int = 256,
+        bucket_batch_size: int = 0,
     ) -> None:
         super().__init__()
         self.doc_dataset = doc_dataset
@@ -220,12 +345,30 @@ class PairedDomainDataset(IterableDataset):
         self.max_pairs = max_pairs
         self.seed = int(seed)
         self.shuffle_buffer = int(shuffle_buffer)
+        self.bucket_batch_size = int(bucket_batch_size)
         self._epoch = 0
         self._skip_samples = 0
+        self._doc_areas: Optional[List[int]] = None
+        self._scene_areas: Optional[List[int]] = None
 
-    def set_epoch(self, epoch: int, skip_samples: int = 0) -> None:
+    def set_epoch(
+        self,
+        epoch: int,
+        skip_samples: int = 0,
+        bucket_batch_size: Optional[int] = None,
+    ) -> None:
         self._epoch = int(epoch)
         self._skip_samples = max(0, int(skip_samples))
+        if bucket_batch_size is not None:
+            self.bucket_batch_size = int(bucket_batch_size)
+
+    def _ensure_areas(self) -> None:
+        if self.bucket_batch_size <= 1:
+            return
+        if self._doc_areas is None:
+            self._doc_areas = extract_dataset_image_areas(self.doc_dataset)
+        if self._scene_areas is None:
+            self._scene_areas = extract_dataset_image_areas(self.scene_dataset)
 
     def __len__(self) -> int:
         if _is_map_style_dataset(self.scene_dataset):
@@ -238,13 +381,24 @@ class PairedDomainDataset(IterableDataset):
         raise TypeError("Length unavailable for streaming PairedDomainDataset without max_pairs.")
 
     def __iter__(self) -> Iterator[Dict[str, Any]]:
+        self._ensure_areas()
+        sub_bs = max(1, self.bucket_batch_size // 2) if self.bucket_batch_size > 1 else 0
         ep_seed = self.seed + self._epoch * 1009
         doc_cycle = 0
-        doc_it = _iter_shuffled_domain_lazy(self.doc_dataset, ep_seed, self.shuffle_buffer)
-        scene_it = _iter_shuffled_domain_lazy(self.scene_dataset, ep_seed + 1, self.shuffle_buffer)
+        doc_it = _iter_shuffled_domain_lazy(
+            self.doc_dataset, ep_seed, self.shuffle_buffer, bucket_batch_size=sub_bs, areas=self._doc_areas
+        )
+        scene_it = _iter_shuffled_domain_lazy(
+            self.scene_dataset, ep_seed + 1, self.shuffle_buffer, bucket_batch_size=sub_bs, areas=self._scene_areas
+        )
 
         pairs_emitted = 0
+        unskipped_pair_idx = 0
         remaining_skip = self._skip_samples
+        worker_info = get_worker_info()
+        worker_id = worker_info.id if worker_info is not None else 0
+        num_workers = worker_info.num_workers if worker_info is not None else 1
+
         # Primary target epoch stops once TextVQA (target) completes unless max_pairs is set
         while True:
             if self.max_pairs is not None and pairs_emitted >= self.max_pairs:
@@ -258,20 +412,33 @@ class PairedDomainDataset(IterableDataset):
                 doc_getter = next(doc_it)
             except StopIteration:
                 doc_cycle += 1
-                doc_it = _iter_shuffled_domain_lazy(self.doc_dataset, ep_seed + doc_cycle * 37, self.shuffle_buffer)
+                doc_it = _iter_shuffled_domain_lazy(
+                    self.doc_dataset,
+                    ep_seed + doc_cycle * 37,
+                    self.shuffle_buffer,
+                    bucket_batch_size=sub_bs,
+                    areas=self._doc_areas,
+                )
                 try:
                     doc_getter = next(doc_it)
                 except StopIteration:
                     break
 
-            if remaining_skip > 0:
+            skip_doc = remaining_skip > 0
+            if skip_doc:
                 remaining_skip -= 1
-            else:
-                yield doc_getter()
-            if remaining_skip > 0:
+            skip_scene = remaining_skip > 0
+            if skip_scene:
                 remaining_skip -= 1
-            else:
-                yield scene_getter()
+
+            if not (skip_doc and skip_scene):
+                mine = num_workers <= 1 or (unskipped_pair_idx % num_workers) == worker_id
+                if mine:
+                    if not skip_doc:
+                        yield doc_getter()
+                    if not skip_scene:
+                        yield scene_getter()
+                unskipped_pair_idx += 1
             pairs_emitted += 1
 
 

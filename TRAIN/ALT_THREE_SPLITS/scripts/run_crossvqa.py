@@ -63,6 +63,9 @@ def main() -> None:
     parser.add_argument("--resume_from_hub", action="store_true")
     parser.add_argument("--allow_mismatched_resume", action="store_true")
     parser.add_argument("--no_save_optimizer_state", action="store_true")
+    parser.add_argument("--gradient_checkpointing", dest="gradient_checkpointing", action="store_true", default=None)
+    parser.add_argument("--no_gradient_checkpointing", dest="gradient_checkpointing", action="store_false")
+    parser.add_argument("--no_group_by_resolution", action="store_false", dest="group_by_resolution", default=True)
     parser.add_argument("--skip_stage1", action="store_true", help="Reuse cached M_stage1_doc adapter if available")
     parser.add_argument("--save_every_steps", type=int, default=None)
     parser.add_argument("--max_train_steps", type=int, default=None)
@@ -149,6 +152,12 @@ def main() -> None:
     final_stage_name = "stage3_transfer" if args.exp == "M3" else "stage2_transfer"
 
     use_4bit = bool(hw.get("load_in_4bit", tr_cfg["load_in_4bit"]) and model_info.get("allow_4bit", True))
+    use_grad_ckpt = (
+        bool(args.gradient_checkpointing)
+        if args.gradient_checkpointing is not None
+        else (True if use_4bit else bool(hw.get("gradient_checkpointing", True)))
+    )
+    optim_name = "paged_adamw_8bit" if use_4bit else str(hw.get("optim", "adamw_torch_fused"))
     model, processor = build_vlm_model_and_processor(
         model_name_or_key=args.model,
         load_in_4bit=use_4bit,
@@ -158,8 +167,8 @@ def main() -> None:
         lora_dropout=tr_cfg["lora_dropout"],
         min_pixels=hw["min_pixels"],
         max_pixels=hw["max_pixels"],
-        smolvlm_longest_edge=hw.get("smolvlm_longest_edge", 2048),
-        gradient_checkpointing=True,
+        smolvlm_longest_edge=hw.get("smolvlm_longest_edge", 1536),
+        gradient_checkpointing=use_grad_ckpt,
         attn_implementation=hw["attn_implementation"],
         adapter_checkpoint=resume_ckpt,
         architecture_mode="dual_lora",
@@ -228,7 +237,7 @@ def main() -> None:
             warmup_ratio=tr_cfg["warmup_ratio"],
             gradient_accumulation_steps=grad_accum,
             max_grad_norm=tr_cfg["max_grad_norm"],
-            optim_name=hw["optim"],
+            optim_name=optim_name,
             include_ocr=args.include_ocr,
             lambda_gate=lambda_gate,
             checkpoint_manager=stage1_mgr,
@@ -246,6 +255,7 @@ def main() -> None:
             config_fingerprint=base_fingerprint,
             save_optimizer_state=not args.no_save_optimizer_state,
             allow_mismatched_resume=args.allow_mismatched_resume,
+            group_by_resolution=args.group_by_resolution,
         )
 
     # Alignment loss initialization (M2 / M3)
@@ -284,7 +294,7 @@ def main() -> None:
             warmup_ratio=tr_cfg["warmup_ratio"],
             gradient_accumulation_steps=grad_accum,
             max_grad_norm=tr_cfg["max_grad_norm"],
-            optim_name=hw["optim"],
+            optim_name=optim_name,
             include_ocr=args.include_ocr,
             use_soft_weights=args.use_soft_weights,
             align_loss_fn=align_loss_fn,
@@ -308,6 +318,7 @@ def main() -> None:
             config_fingerprint=base_fingerprint,
             save_optimizer_state=not args.no_save_optimizer_state,
             allow_mismatched_resume=args.allow_mismatched_resume,
+            group_by_resolution=args.group_by_resolution,
         )
 
     # Final Transfer Stage: Target TextVQA Adaptation (with frozen A_doc + Paired Alignment)
@@ -337,7 +348,7 @@ def main() -> None:
         warmup_ratio=tr_cfg["warmup_ratio"],
         gradient_accumulation_steps=grad_accum,
         max_grad_norm=tr_cfg["max_grad_norm"],
-        optim_name=hw["optim"],
+        optim_name=optim_name,
         include_ocr=args.include_ocr,
         use_soft_weights=args.use_soft_weights,
         align_loss_fn=align_loss_fn,
@@ -360,6 +371,7 @@ def main() -> None:
         config_fingerprint=base_fingerprint,
         save_optimizer_state=not args.no_save_optimizer_state,
         allow_mismatched_resume=args.allow_mismatched_resume,
+        group_by_resolution=args.group_by_resolution,
     )
 
     card_cfg = {

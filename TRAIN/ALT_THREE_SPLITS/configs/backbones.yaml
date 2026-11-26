@@ -43,6 +43,7 @@ hardware_profiles:
   l4_24gb:
     dtype: "bf16"
     load_in_4bit: true
+    gradient_checkpointing: false
     attn_implementation: "auto"
     per_device_train_batch_size: 8
     gradient_accumulation_steps: 8
@@ -50,10 +51,11 @@ hardware_profiles:
     min_pixels: 200704
     max_pixels: 1310720
     smolvlm_longest_edge: 1536
-    optim: "paged_adamw_8bit"
+    optim: "adamw_torch_fused"
   a100_40gb:
     dtype: "bf16"
     load_in_4bit: true
+    gradient_checkpointing: false
     attn_implementation: "auto"
     per_device_train_batch_size: 16
     gradient_accumulation_steps: 4
@@ -61,10 +63,11 @@ hardware_profiles:
     min_pixels: 200704
     max_pixels: 1572864
     smolvlm_longest_edge: 1536
-    optim: "paged_adamw_8bit"
+    optim: "adamw_torch_fused"
   g4_96gb:
     dtype: "bf16"
     load_in_4bit: false
+    gradient_checkpointing: false
     attn_implementation: "auto"
     per_device_train_batch_size: 16
     gradient_accumulation_steps: 4
@@ -72,10 +75,11 @@ hardware_profiles:
     min_pixels: 200704
     max_pixels: 2097152
     smolvlm_longest_edge: 1536
-    optim: "adamw"
+    optim: "adamw_torch_fused"
   t4_16gb:
     dtype: "fp16"
     load_in_4bit: true
+    gradient_checkpointing: true
     attn_implementation: "sdpa"
     per_device_train_batch_size: 8
     gradient_accumulation_steps: 8

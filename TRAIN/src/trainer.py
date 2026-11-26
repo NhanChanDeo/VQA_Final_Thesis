@@ -24,6 +24,7 @@ from tqdm.auto import tqdm
 from transformers import get_cosine_schedule_with_warmup
 
 from .collator import CrossVQADataCollator
+from .dataset import _is_map_style_dataset, extract_dataset_image_areas, mega_batch_bucket_indices
 from .metrics import evaluate_predictions, save_predictions_jsonl
 
 NON_MODEL_BATCH_KEYS = {"domain_ids", "sample_weights"}
@@ -33,58 +34,63 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "name": "l4_24gb",
         "dtype": "bf16",
         "load_in_4bit": True,
+        "gradient_checkpointing": False,
         "attn_implementation": "auto",
         "per_device_train_batch_size": 8,
         "gradient_accumulation_steps": 8,
         "eval_batch_size": 16,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 1280 * 1024,
-        "smolvlm_longest_edge": 2048,
-        "optim": "paged_adamw_8bit",
+        "smolvlm_longest_edge": 1536,
+        "optim": "adamw_torch_fused",
     },
     "a100_40gb": {
         "name": "a100_40gb",
         "dtype": "bf16",
         "load_in_4bit": True,
+        "gradient_checkpointing": False,
         "attn_implementation": "auto",
         "per_device_train_batch_size": 16,
         "gradient_accumulation_steps": 4,
         "eval_batch_size": 16,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 1536 * 1024,
-        "smolvlm_longest_edge": 2048,
-        "optim": "paged_adamw_8bit",
+        "smolvlm_longest_edge": 1536,
+        "optim": "adamw_torch_fused",
     },
     "g4_96gb": {
         "name": "g4_96gb",
         "dtype": "bf16",
         "load_in_4bit": False,
+        "gradient_checkpointing": False,
         "attn_implementation": "auto",
         "per_device_train_batch_size": 16,
         "gradient_accumulation_steps": 4,
         "eval_batch_size": 32,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 2048 * 1024,
-        "smolvlm_longest_edge": 2048,
-        "optim": "adamw",
+        "smolvlm_longest_edge": 1536,
+        "optim": "adamw_torch_fused",
     },
     "t4_16gb": {
         "name": "t4_16gb",
         "dtype": "fp16",
         "load_in_4bit": True,
+        "gradient_checkpointing": True,
         "attn_implementation": "sdpa",
-        "per_device_train_batch_size": 4,
-        "gradient_accumulation_steps": 16,
+        "per_device_train_batch_size": 8,
+        "gradient_accumulation_steps": 8,
         "eval_batch_size": 8,
         "min_pixels": 256 * 28 * 28,
         "max_pixels": 1024 * 1024,
-        "smolvlm_longest_edge": 2048,
+        "smolvlm_longest_edge": 1536,
         "optim": "paged_adamw_8bit",
     },
     "cpu": {
         "name": "cpu",
         "dtype": "fp32",
         "load_in_4bit": False,
+        "gradient_checkpointing": False,
         "attn_implementation": "sdpa",
         "per_device_train_batch_size": 2,
         "gradient_accumulation_steps": 1,
@@ -733,6 +739,10 @@ class CrossVQATrainer:
         self.curriculum_transform = curriculum_transform
         self.checkpoint_manager = checkpoint_manager
         self.log_path = self.run_dir / "train_log.jsonl"
+        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+        if torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
 
     def _build_optimizer(self):
         params = [p for p in self.model.parameters() if p.requires_grad]
@@ -741,6 +751,11 @@ class CrossVQATrainer:
                 import bitsandbytes as bnb
 
                 return bnb.optim.PagedAdamW8bit(params, lr=self.lr, weight_decay=self.weight_decay)
+            except Exception:
+                pass
+        if self.optim_name == "adamw_torch_fused" and torch.cuda.is_available():
+            try:
+                return torch.optim.AdamW(params, lr=self.lr, weight_decay=self.weight_decay, fused=True)
             except Exception:
                 pass
         return torch.optim.AdamW(params, lr=self.lr, weight_decay=self.weight_decay)
@@ -793,6 +808,7 @@ class CrossVQATrainer:
         config_fingerprint: Optional[Dict[str, Any]] = None,
         save_optimizer_state: bool = True,
         allow_mismatched_resume: bool = False,
+        group_by_resolution: bool = True,
     ) -> Dict[str, Any]:
         collator = CrossVQADataCollator(
             self.processor,
@@ -802,16 +818,19 @@ class CrossVQATrainer:
             use_soft_weights=self.use_soft_weights,
             image_transform=self.curriculum_transform,
         )
-        is_map_style = (
-            hasattr(train_dataset, "__len__")
-            and hasattr(train_dataset, "__getitem__")
-            and not isinstance(train_dataset, IterableDataset)
+        is_map_style = _is_map_style_dataset(train_dataset)
+        has_map_style_inner = (
+            hasattr(train_dataset, "doc_dataset")
+            and hasattr(train_dataset, "scene_dataset")
+            and _is_map_style_dataset(train_dataset.doc_dataset)
+            and _is_map_style_dataset(train_dataset.scene_dataset)
         )
         eff_workers = (
             min(2, os.cpu_count() or 1)
-            if (is_map_style and torch.cuda.is_available() and sys.platform != "win32")
+            if ((is_map_style or has_map_style_inner) and torch.cuda.is_available() and sys.platform != "win32")
             else 0
         )
+        train_areas = extract_dataset_image_areas(train_dataset) if (is_map_style and group_by_resolution) else None
 
         try:
             batches_per_epoch = math.ceil(len(train_dataset) / max(1, int(batch_size)))
@@ -927,16 +946,24 @@ class CrossVQATrainer:
                 perm_gen = torch.Generator()
                 perm_gen.manual_seed(int(seed) + (epoch - 1) * 1009)
                 perm = torch.randperm(len(train_dataset), generator=perm_gen).tolist()
+                if group_by_resolution and train_areas is not None:
+                    perm = mega_batch_bucket_indices(
+                        perm, train_areas, batch_size, int(seed) + (epoch - 1) * 1009 + 77
+                    )
                 epoch_ds = _DeterministicEpochSubset(train_dataset, perm[skip_here:])
                 dataloader = DataLoader(epoch_ds, **dl_kwargs)
             else:
                 manual_skip = False
+                bucket_bs = int(batch_size) if group_by_resolution else 0
                 if hasattr(train_dataset, "set_epoch"):
                     try:
-                        train_dataset.set_epoch(epoch - 1, skip_samples=skip_here)
+                        train_dataset.set_epoch(epoch - 1, skip_samples=skip_here, bucket_batch_size=bucket_bs)
                     except TypeError:
-                        train_dataset.set_epoch(epoch - 1)
-                        manual_skip = skip_here > 0
+                        try:
+                            train_dataset.set_epoch(epoch - 1, skip_samples=skip_here)
+                        except TypeError:
+                            train_dataset.set_epoch(epoch - 1)
+                            manual_skip = skip_here > 0
                 elif skip_here > 0:
                     manual_skip = True
                 if manual_skip:
