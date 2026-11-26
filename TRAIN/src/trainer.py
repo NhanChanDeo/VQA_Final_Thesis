@@ -3,6 +3,7 @@ Standardized training, checkpoint resilience, hardware profiling, and evaluation
 utilities for CrossVQA baselines (Z0, B1–B5) and proposed methods (M1–M3).
 """
 
+import gc
 import inspect
 import io
 import itertools
@@ -396,20 +397,41 @@ class _EvalCollateWrapper:
         return batch, meta
 
 
-def _image_size_from_payload(payload: Any) -> int:
-    if isinstance(payload, Image.Image):
-        return int(payload.width) * int(payload.height)
-    if isinstance(payload, dict):
-        if payload.get("bytes") is not None:
-            with Image.open(io.BytesIO(payload["bytes"])) as im:
-                return int(im.width) * int(im.height)
-        if payload.get("path"):
-            with Image.open(payload["path"]) as im:
-                return int(im.width) * int(im.height)
-    if isinstance(payload, bytes):
-        with Image.open(io.BytesIO(payload)) as im:
-            return int(im.width) * int(im.height)
-    return 0
+def _get_host_ram_gb() -> Optional[float]:
+    """Returns total host physical RAM in GiB when available (POSIX), else None."""
+    try:
+        if hasattr(os, "sysconf"):
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            phys_pages = os.sysconf("SC_PHYS_PAGES")
+            if page_size > 0 and phys_pages > 0:
+                return (page_size * phys_pages) / float(1024 ** 3)
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_loader_settings(
+    requested_workers: int,
+    use_cuda: bool,
+    is_eval: bool = False,
+    low_ram_threshold_gb: float = 24.0,
+) -> Tuple[int, int, bool]:
+    """
+    Caps DataLoader workers, prefetch_factor, and pin_memory on low-RAM VMs
+    (e.g., 12.7 GB Colab T4) to prevent Linux OOM SIGKILL during fork/eval.
+    """
+    workers = max(int(requested_workers), 0)
+    prefetch = 2
+    pin_mem = bool(use_cuda)
+    ram_gb = _get_host_ram_gb()
+    if ram_gb is not None and ram_gb < low_ram_threshold_gb:
+        if is_eval:
+            workers = 0
+            pin_mem = False
+        else:
+            workers = min(workers, 1)
+            prefetch = 1
+    return workers, prefetch, pin_mem
 
 
 def _bucket_indices_by_resolution(dataset: Any, count: int) -> List[int]:
@@ -421,25 +443,14 @@ def _bucket_indices_by_resolution(dataset: Any, count: int) -> List[int]:
     if count <= 1:
         return indices
     try:
-        col_names = list(getattr(dataset, "column_names", []) or [])
-        for w_col, h_col in (("image_width", "image_height"), ("width", "height")):
-            if w_col in col_names and h_col in col_names:
-                sub = dataset.select(indices) if hasattr(dataset, "select") else dataset
-                widths = sub[w_col][:count]
-                heights = sub[h_col][:count]
-                areas = [int(w) * int(h) for w, h in zip(widths, heights)]
-                return sorted(indices, key=lambda i: areas[i])
-
-        if hasattr(dataset, "cast_column") and "image" in getattr(dataset, "features", {}):
-            from datasets import Image as HFImage
-
-            raw_ds = dataset.select(indices) if hasattr(dataset, "select") else dataset
-            raw_ds = raw_ds.cast_column("image", HFImage(decode=False))
-            areas = [_image_size_from_payload(p) for p in raw_ds["image"]]
-            return sorted(indices, key=lambda i: areas[i])
-
         if isinstance(dataset, (list, tuple)):
-            areas = [_image_size_from_payload(dataset[i].get("image")) for i in indices]
+            sub = dataset[:count]
+        elif hasattr(dataset, "select") and hasattr(dataset, "__len__") and count < len(dataset):
+            sub = dataset.select(indices)
+        else:
+            sub = dataset
+        areas = extract_dataset_image_areas(sub)
+        if areas is not None and len(areas) == count:
             return sorted(indices, key=lambda i: areas[i])
     except Exception:
         pass
@@ -568,20 +579,27 @@ def run_evaluation(
             indices = _bucket_indices_by_resolution(eval_dataset, eval_count) if bucket_by_resolution else list(range(eval_count))
             wrapped_ds = _IndexedEvalDataset(eval_dataset, indices)
             eff_workers = 0 if isinstance(eval_dataset, (list, tuple)) else max(int(num_workers), 0)
+            use_cuda = isinstance(device, str) and device.startswith("cuda")
+            eff_workers, eval_prefetch, eval_pin_mem = _resolve_loader_settings(
+                eff_workers, use_cuda=use_cuda, is_eval=True
+            )
             dl_kwargs: Dict[str, Any] = {
                 "batch_size": bs,
                 "shuffle": False,
                 "num_workers": eff_workers,
                 "collate_fn": _EvalCollateWrapper(collator),
-                "pin_memory": isinstance(device, str) and device.startswith("cuda"),
+                "pin_memory": eval_pin_mem,
             }
             if eff_workers > 0:
-                dl_kwargs["prefetch_factor"] = 2
+                dl_kwargs["prefetch_factor"] = eval_prefetch
                 dl_kwargs["persistent_workers"] = False
 
+            gc.collect()
             loader = DataLoader(wrapped_ds, **dl_kwargs)
             for batch, meta_list in tqdm(loader, desc="Evaluating", total=len(loader)):
                 _run_batch(batch, meta_list)
+            del loader, wrapped_ds
+            gc.collect()
 
             if bucket_by_resolution and len(orig_order) > 1:
                 restore_perm = sorted(range(len(orig_order)), key=lambda i: orig_order[i])
@@ -842,10 +860,13 @@ class CrossVQATrainer:
             and _is_map_style_dataset(train_dataset.doc_dataset)
             and _is_map_style_dataset(train_dataset.scene_dataset)
         )
-        eff_workers = (
+        base_workers = (
             min(2, os.cpu_count() or 1)
             if ((is_map_style or has_map_style_inner) and torch.cuda.is_available() and sys.platform != "win32")
             else 0
+        )
+        eff_workers, train_prefetch, train_pin_mem = _resolve_loader_settings(
+            base_workers, use_cuda=torch.cuda.is_available(), is_eval=False
         )
         train_areas = extract_dataset_image_areas(train_dataset) if (is_map_style and group_by_resolution) else None
 
@@ -961,11 +982,11 @@ class CrossVQATrainer:
                 "batch_size": batch_size,
                 "shuffle": False,
                 "collate_fn": collator,
-                "pin_memory": torch.cuda.is_available(),
+                "pin_memory": train_pin_mem,
                 "num_workers": eff_workers,
             }
             if eff_workers > 0:
-                dl_kwargs["prefetch_factor"] = 2
+                dl_kwargs["prefetch_factor"] = train_prefetch
 
             if is_map_style:
                 perm_gen = torch.Generator()
@@ -1113,6 +1134,14 @@ class CrossVQATrainer:
                 scheduler.step()
                 optimizer.zero_grad()
                 global_opt_step += 1
+
+            # Release training DataLoader workers/buffers before running validation
+            del pbar, dataloader
+            if is_map_style:
+                del epoch_ds, perm
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             # Per-epoch validation & checkpointing
             val_metrics = eval_fn() if eval_fn is not None else {}

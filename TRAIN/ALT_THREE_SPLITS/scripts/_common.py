@@ -3,6 +3,7 @@ Shared configuration, seeding, Hugging Face token resolution, and dual-domain
 evaluation helpers for TRAIN/ALT_THREE_SPLITS/scripts/.
 """
 
+import gc
 import os
 import random
 import subprocess
@@ -257,6 +258,10 @@ def evaluate_both_domains(
         save_predictions_jsonl(details, str(run_dir / f"preds_{eval_split}_{ds_name}.jsonl"))
         summary[f"{ds_name}_anls"] = round(float(metrics.get("anls", 0.0)), 6)
         summary[f"{ds_name}_vqa_accuracy"] = round(float(metrics.get("vqa_accuracy", 0.0)), 6)
+        del ds, details, metrics
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     doc_anls = summary["docvqa_anls"]
     tv_acc = summary["textvqa_vqa_accuracy"]

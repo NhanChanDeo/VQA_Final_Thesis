@@ -162,8 +162,9 @@ def extract_dataset_image_areas(dataset: Any) -> Optional[List[int]]:
         if hasattr(dataset, "cast_column") and "image" in getattr(dataset, "features", {}):
             from datasets import Image as HFImage
 
-            raw_ds = dataset.cast_column("image", HFImage(decode=False))
-            return [_image_area_from_payload(p) for p in raw_ds["image"]]
+            raw_ds = dataset.select_columns(["image"]) if hasattr(dataset, "select_columns") else dataset
+            raw_ds = raw_ds.cast_column("image", HFImage(decode=False))
+            return [_image_area_from_payload(raw_ds[i]["image"]) for i in range(len(raw_ds))]
 
         if isinstance(dataset, (list, tuple)):
             return [_image_area_from_payload(item.get("image")) for item in dataset]

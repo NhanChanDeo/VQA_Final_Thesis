@@ -1267,9 +1267,22 @@ def test_mega_batch_resolution_bucketing_and_fused_adamw(tmp_path):
     assert isinstance(opt, torch.optim.AdamW)
 
     # Cross-optimizer state format guard (e.g. PagedAdamW8bit 'state1' -> torch.optim.AdamW)
-    from TRAIN.src.trainer import _is_optimizer_state_compatible
+    from TRAIN.src.trainer import _is_optimizer_state_compatible, _resolve_loader_settings
 
     fake_bnb_state = {"state": {0: {"state1": torch.zeros(2), "state2": torch.zeros(2)}}}
     assert _is_optimizer_state_compatible(opt, fake_bnb_state) is False
     valid_adam_state = {"state": {0: {"exp_avg": torch.zeros(2), "exp_avg_sq": torch.zeros(2)}}}
     assert _is_optimizer_state_compatible(opt, valid_adam_state) is True
+
+    # Low-RAM VM DataLoader cap protects 12.7 GB Colab T4 against OOM SIGKILL during eval/fork
+    import TRAIN.src.trainer as trainer_mod
+    orig_ram_fn = trainer_mod._get_host_ram_gb
+    try:
+        trainer_mod._get_host_ram_gb = lambda: 12.7
+        assert _resolve_loader_settings(2, use_cuda=True, is_eval=True) == (0, 2, False)
+        assert _resolve_loader_settings(2, use_cuda=True, is_eval=False) == (1, 1, True)
+        trainer_mod._get_host_ram_gb = lambda: 53.0
+        assert _resolve_loader_settings(2, use_cuda=True, is_eval=True) == (2, 2, True)
+        assert _resolve_loader_settings(2, use_cuda=True, is_eval=False) == (2, 2, True)
+    finally:
+        trainer_mod._get_host_ram_gb = orig_ram_fn
