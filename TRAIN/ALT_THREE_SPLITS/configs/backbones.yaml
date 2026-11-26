@@ -49,7 +49,7 @@ hardware_profiles:
     eval_batch_size: 16
     min_pixels: 200704
     max_pixels: 1310720
-    smolvlm_longest_edge: 2048
+    smolvlm_longest_edge: 1536
     optim: "paged_adamw_8bit"
   a100_40gb:
     dtype: "bf16"
@@ -60,7 +60,7 @@ hardware_profiles:
     eval_batch_size: 16
     min_pixels: 200704
     max_pixels: 1572864
-    smolvlm_longest_edge: 2048
+    smolvlm_longest_edge: 1536
     optim: "paged_adamw_8bit"
   g4_96gb:
     dtype: "bf16"
@@ -71,7 +71,7 @@ hardware_profiles:
     eval_batch_size: 32
     min_pixels: 200704
     max_pixels: 2097152
-    smolvlm_longest_edge: 2048
+    smolvlm_longest_edge: 1536
     optim: "adamw"
   t4_16gb:
     dtype: "fp16"
@@ -82,5 +82,5 @@ hardware_profiles:
     eval_batch_size: 8
     min_pixels: 200704
     max_pixels: 1048576
-    smolvlm_longest_edge: 2048
+    smolvlm_longest_edge: 1536
     optim: "paged_adamw_8bit"
