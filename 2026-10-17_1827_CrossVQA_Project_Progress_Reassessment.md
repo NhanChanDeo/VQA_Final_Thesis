@@ -57,7 +57,7 @@ To guarantee completion within ~62 Colab L4 GPU-hours, **`M1–M3` (`DualLoRA`, 
 Early pilot runs of `B1` and `B2` on `smolvlm_500m` (`seed=42`) collapsed (`B1 textvqa_vqa_acc = 0.0000`; `B2 docvqa_anls = 0.0397 -> 0.0307`) due to a tokenizer edge case:
 - In `HuggingFaceTB/SmolVLM-500M-Base`, **`eos_token` (`<|im_end|>`, ID `2`) is identical to `pad_token`**.
 - [`TRAIN/src/collator.py`](TRAIN/src/collator.py) previously applied `labels[labels == pad_id] = -100`, inadvertently masking out `<|im_end|>` on every training target so the model never learned to terminate greedy generation.
-- **Resolution (2026-11-27):** Updated `collator.py` to mask padding strictly via `inputs["attention_mask"] == 0` (verified by `test_collator_preserves_eos_when_pad_equals_eos` in [`TRAIN/tests/test_pipeline_smoke.py`](TRAIN/tests/test_pipeline_smoke.py), `25/25` passing), and excluded `checkpoints/` from Colab Drive `runs_logs` mirroring. **Old `ebs64/smolvlm_500m/{B1,B2}` checkpoints on HF Hub must be deleted before re-running fresh.**
+- **Resolution (2026-11-27):** Updated `collator.py` to mask padding strictly via `inputs["attention_mask"] == 0` (verified by `test_collator_preserves_eos_when_pad_equals_eos` in [`TRAIN/tests/test_pipeline_smoke.py`](TRAIN/tests/test_pipeline_smoke.py), `26/26` passing), excluded `checkpoints/` from Colab Drive `runs_logs` mirroring, and bumped `baselines_B1_B5.yaml` `checkpoint_namespace` to `ebs64_v2` so fresh runs isolate cleanly from pre-fix `ebs64` checkpoints on HF Hub and Google Drive.
 
 ---
 
