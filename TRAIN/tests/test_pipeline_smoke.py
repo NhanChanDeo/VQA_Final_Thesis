@@ -251,6 +251,33 @@ def test_collator_masking_placeholders_and_eval_left_padding():
     assert "<|vision_start|><|image_pad|><|vision_end|>" in proc_broken.last_texts[0][0]
 
 
+def test_collator_preserves_eos_when_pad_equals_eos():
+    """Regression test for SmolVLM-500M-Base where pad_token_id == eos_token_id."""
+    img = Image.new("RGB", (32, 32), color=(128, 128, 128))
+    batch = [
+        {"image": img, "question": "Q?", "canonical_answer": "yes", "domain_type": "scene_text"},
+        {"image": img, "question": "Q?", "canonical_answer": "a much longer answer", "domain_type": "scene_text"},
+    ]
+    proc = _DummyProcessor(with_chat_template=False)
+    proc.tokenizer.pad_token_id = proc.tokenizer.eos_token_id
+    proc.tokenizer._vocab["<eos>"] = proc.tokenizer.eos_token_id
+
+    col = CrossVQADataCollator(proc, model_type="smolvlm", include_ocr=False, is_train=True)
+    out = col(batch)
+    eos_id = proc.tokenizer.eos_token_id
+
+    # Shorter sample (idx 0) has trailing padding masked to -100, but its EOS token must remain supervised
+    attn_0 = out["attention_mask"][0]
+    last_real_0 = int(attn_0.sum().item()) - 1
+    assert out["input_ids"][0, last_real_0].item() == eos_id
+    assert out["labels"][0, last_real_0].item() == eos_id
+    assert (out["labels"][0, last_real_0 + 1 :] == -100).all()
+
+    # Longer sample (idx 1) also keeps its final EOS token supervised
+    assert out["input_ids"][1, -1].item() == eos_id
+    assert out["labels"][1, -1].item() == eos_id
+
+
 def test_dual_lora_linear_and_wrapper_stage_freezing_and_roundtrip(tmp_path):
     torch.manual_seed(0)
     base = nn.Linear(8, 8)

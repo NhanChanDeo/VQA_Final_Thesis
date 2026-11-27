@@ -306,8 +306,13 @@ if not _gdrive_dir and Path("/content/drive/MyDrive").exists():
 if _gdrive_dir:
     drive_runs = Path(_gdrive_dir) / "runs_logs"
     drive_runs.mkdir(parents=True, exist_ok=True)
-    shutil.copytree("TRAIN/ALT_THREE_SPLITS/runs", drive_runs, dirs_exist_ok=True)
-    print(f"Mirrored lightweight run logs to {drive_runs}")
+    shutil.copytree(
+        "TRAIN/ALT_THREE_SPLITS/runs",
+        drive_runs,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("checkpoints", "*.safetensors", "*.pt", "*.pth", "*.bin", "*.ckpt"),
+    )
+    print(f"Mirrored lightweight run logs to {drive_runs} (checkpoints excluded)")
 
 # Optional unattended GitHub push for lightweight JSON/YAML/PNG run artifacts
 PUSH_LOGS_TO_GITHUB = True  # Set True when ready to commit logs from Colab

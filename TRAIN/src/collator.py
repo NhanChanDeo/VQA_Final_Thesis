@@ -173,9 +173,14 @@ class CrossVQADataCollator:
 
             if "input_ids" in inputs:
                 labels = inputs["input_ids"].clone()
-                pad_id = getattr(tokenizer, "pad_token_id", None) if tokenizer is not None else None
-                if pad_id is not None:
-                    labels[labels == pad_id] = -100
+                if "attention_mask" in inputs:
+                    # Mask padding via attention_mask so eos_token is preserved when pad_token_id == eos_token_id
+                    labels[inputs["attention_mask"] == 0] = -100
+                else:
+                    pad_id = getattr(tokenizer, "pad_token_id", None) if tokenizer is not None else None
+                    eos_id = getattr(tokenizer, "eos_token_id", None) if tokenizer is not None else None
+                    if pad_id is not None and pad_id != eos_id:
+                        labels[labels == pad_id] = -100
 
                 if "attention_mask" in prompt_inputs:
                     prompt_lens = prompt_inputs["attention_mask"].sum(dim=1)

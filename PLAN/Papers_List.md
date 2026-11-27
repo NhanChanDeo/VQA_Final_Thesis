@@ -3,7 +3,7 @@
 > **Thư mục lưu trữ:** [`PLAN/Papers`](Papers)  
 > **Đề tài:** CrossVQA: Nghiên cứu chuyển giao tri thức liên miền từ ảnh tài liệu sang ảnh cảnh tự nhiên cho mô hình Thị giác–Ngôn ngữ  
 > **Bộ dữ liệu chính (Canonical):** [`gamusa/textvqa-canonical`](https://huggingface.co/datasets/gamusa/textvqa-canonical) & [`gamusa/docvqa-canonical`](https://huggingface.co/datasets/gamusa/docvqa-canonical) *(Kế thừa từ nguyên bản TextVQA v0.5.1 & SP-DocVQA Task 1)*  
-> **Thời điểm cập nhật:** 15/11/2026  
+> **Thời điểm cập nhật:** 26/11/2026  
 
 ---
 
@@ -350,7 +350,7 @@
 ## 7. Bổ Sung: Bài Báo Về Kiến Trúc Mô Hình Nền Tảng VLM & Tinh Chỉnh Lượng Tử Hóa (VLM Backbones & PEFT/Quantization)
 
 > **Thư mục lưu trữ con:** [`PLAN/Papers/Model Info`](Papers/Model%20Info)  
-> **Thời điểm cập nhật:** 15/11/2026  
+> **Thời điểm cập nhật:** 26/11/2026  
 > **Tham chiếu chéo các mô hình nền tảng đã có sẵn trong [`PLAN/Papers`](Papers):** STT **5** ([`Kim_2022_Donut.pdf`](Papers/Kim_2022_Donut.pdf)), STT **6** ([`Beyer_2024_PaliGemma.pdf`](Papers/Beyer_2024_PaliGemma.pdf)), STT **8** ([`Lee_2023_Pix2Struct.pdf`](Papers/Lee_2023_Pix2Struct.pdf)).
 
 | STT | Tên Tệp PDF | Tiêu Đề Bài Báo | Tác Giả & Năm | Nguồn / Hội Nghị | arXiv ID | Vai Trò trong Luận Văn |
@@ -509,6 +509,79 @@
   year      = {2023}
 }
 ```
+
+---
+
+## 7. Bổ Sung: Công Bằng Ngân Sách Tính Toán & Đối Chiếu Thực Nghiệm (Compute-Budget Fairness)
+
+> **Thời điểm cập nhật:** 26/11/2026
+
+| STT | Tên Tệp PDF | Tiêu Đề Bài Báo | Tác Giả & Năm | Nguồn / Hội Nghị | arXiv ID | Vai Trò trong Luận Văn |
+| :---: | :--- | :--- | :--- | :---: | :---: | :--- |
+| **30** | [`Dodge_2019_ShowYourWork.pdf`](Papers/Dodge_2019_ShowYourWork.pdf) | Show Your Work: Improved Reporting of Experimental Results | Jesse Dodge et al. (2019) | EMNLP 2019 | [`1909.03004`](https://arxiv.org/abs/1909.03004) | **Equal-Compute Methodology**: Chứng minh so sánh chỉ dựa trên điểm validation cao nhất mà bỏ qua ngân sách tính toán có thể đảo ngược kết luận; chuẩn hóa đối chiếu dưới ngân sách tính toán tương đương |
+| **31** | [`Bartoldson_2023_ComputeEfficientDL.pdf`](Papers/Bartoldson_2023_ComputeEfficientDL.pdf) | Compute-Efficient Deep Learning: Algorithmic Trends and Opportunities | Brian R. Bartoldson et al. (2023) | JMLR 2023 | [`2210.06640`](https://arxiv.org/abs/2210.06640) | **Compute-Matched Evaluation**: Thiết lập chuẩn đánh giá công bằng theo FLOPs / số bước cập nhật tương đương (compute-matched), cô lập đóng góp thuật toán khỏi thời gian/khối lượng huấn luyện |
+| **32** | [`Hoffmann_2022_Chinchilla.pdf`](Papers/Hoffmann_2022_Chinchilla.pdf) | Training Compute-Optimal Large Language Models (Chinchilla) | Jordan Hoffmann et al. (2022) | NeurIPS 2022 | [`2203.15556`](https://arxiv.org/abs/2203.15556) | **Fixed-Compute & Cosine Schedule**: Chuẩn hóa thực nghiệm theo ngân sách tính toán cố định và điều chỉnh chu kỳ cosine LR theo đúng tổng số bước mục tiêu (`MAX_TRAIN_STEPS`) |
+
+### Chi Tiết Từng Bài Báo & Ý Nghĩa Trích Dẫn
+
+#### 30. Show Your Work: Improved Reporting of Experimental Results
+* **Tệp:** [`Dodge_2019_ShowYourWork.pdf`](Papers/Dodge_2019_ShowYourWork.pdf)
+* **Tác giả:** Jesse Dodge, Suchin Gururangan, Dallas Card, Roy Schwartz, Noah A. Smith (Allen Institute for AI & University of Washington / CMU)
+* **arXiv / DOI:** [arXiv:1909.03004](https://arxiv.org/abs/1909.03004) | EMNLP 2019
+* **Nội dung chính:**
+  - Chỉ ra rằng việc so sánh các mô hình chỉ dựa trên điểm validation tốt nhất (`best` checkpoint) hoặc điểm test cuối cùng mà không kiểm soát ngân sách tính toán có thể dẫn đến kết luận sai lệch hoặc đảo ngược hoàn toàn thứ hạng mô hình.
+  - Đề xuất đánh giá theo đường cong hiệu năng–ngân sách tính toán (Expected Validation Performance) để đảm bảo công bằng giữa các phương pháp.
+* **Vị trí trích dẫn:** Chương 3 & Chương 4 (Lập luận cân bằng số bước cập nhật optimizer giữa `B1`/`B2` và `B3`/`M1–M3`).
+
+---
+
+#### 31. Compute-Efficient Deep Learning: Algorithmic Trends and Opportunities
+* **Tệp:** [`Bartoldson_2023_ComputeEfficientDL.pdf`](Papers/Bartoldson_2023_ComputeEfficientDL.pdf)
+* **Tác giả:** Brian R. Bartoldson, Bhavya Kailkhura, Davis Blalock (Lawrence Livermore National Laboratory & MosaicML)
+* **arXiv / DOI:** [arXiv:2210.06640](https://arxiv.org/abs/2210.06640) | JMLR 2023
+* **Nội dung chính:**
+  - Hệ thống hóa khái niệm tăng tốc thuật toán và đưa ra quy chuẩn đánh giá **compute-matched** (đối chiếu ở cùng mức FLOPs hoặc số bước tối ưu tương đương thay vì để một phương pháp chạy nhiều vòng lặp hơn).
+* **Vị trí trích dẫn:** Chương 3 & Chương 4 (Thiết kế thực nghiệm đối chiếu công bằng giữa mô hình đơn miền và đa miền).
+
+---
+
+#### 32. Training Compute-Optimal Large Language Models (Chinchilla)
+* **Tệp:** [`Hoffmann_2022_Chinchilla.pdf`](Papers/Hoffmann_2022_Chinchilla.pdf)
+* **Tác giả:** Jordan Hoffmann, Sebastian Borgeaud, Arthur Mensch et al. (DeepMind)
+* **arXiv / DOI:** [arXiv:2203.15556](https://arxiv.org/abs/2203.15556) | NeurIPS 2022
+* **Nội dung chính:**
+  - Chuẩn hóa phương pháp so sánh các mô hình dưới ngân sách tính toán cố định (fixed compute budget) và nhấn mạnh tầm quan trọng của việc co giãn lịch suy giảm **cosine learning rate** khớp đúng với tổng số bước huấn luyện mục tiêu.
+* **Vị trí trích dẫn:** Chương 3 & Chương 4 (Cấu hình `MAX_TRAIN_STEPS` và tự động co giãn `get_cosine_schedule_with_warmup` trong `CrossVQATrainer`).
+
+### Danh Mục BibTeX Trích Dẫn Bổ Sung (Compute-Budget Fairness)
+
+```bibtex
+@inproceedings{dodge2019show,
+  title     = {Show Your Work: Improved Reporting of Experimental Results},
+  author    = {Dodge, Jesse and Gururangan, Suchin and Card, Dallas and Schwartz, Roy and Smith, Noah A.},
+  booktitle = {Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing (EMNLP-IJCNLP)},
+  pages     = {2185--2194},
+  year      = {2019}
+}
+
+@article{bartoldson2023compute,
+  title   = {Compute-Efficient Deep Learning: Algorithmic Trends and Opportunities},
+  author  = {Bartoldson, Brian R. and Kailkhura, Bhavya and Blalock, Davis},
+  journal = {Journal of Machine Learning Research (JMLR)},
+  volume  = {24},
+  number  = {122},
+  pages   = {1--77},
+  year    = {2023}
+}
+
+@inproceedings{hoffmann2022training,
+  title     = {Training Compute-Optimal Large Language Models},
+  author    = {Hoffmann, Jordan and Borgeaud, Sebastian and Mensch, Arthur and Buchatskaya, Elena and Cai, Trevor and Rutherford, Eliza and de Las Casas, Diego and Hendricks, Lisa Anne and Welbl, Johannes and Clark, Aidan and others},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2022}
+}
+```
+
 
 
 
