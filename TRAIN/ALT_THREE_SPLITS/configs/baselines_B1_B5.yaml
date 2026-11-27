@@ -8,7 +8,7 @@ runs_root: "TRAIN/ALT_THREE_SPLITS/runs"
 checkpoints:
   hf_repo_id: "gamusa/crossvqa-checkpoints"
   hf_private: true
-  checkpoint_namespace: "ebs64"
+  checkpoint_namespace: "ebs64_v2"
   gdrive_backup_root: "/content/drive/MyDrive/CrossVQA_Checkpoints/ALT_THREE_SPLITS"
   save_every_steps: 64
 

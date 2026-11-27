@@ -905,8 +905,9 @@ def test_hardware_profiles_effective_bs64_parity():
         assert yaml_p["gradient_checkpointing"] is expected_gc
         assert yaml_p["per_device_train_batch_size"] * yaml_p["gradient_accumulation_steps"] == 64
 
+    assert base_cfg["checkpoints"]["checkpoint_namespace"] == "ebs64_v2"
+    assert m_cfg["checkpoints"]["checkpoint_namespace"] == "ebs64"
     for cfg in (base_cfg, m_cfg):
-        assert cfg["checkpoints"]["checkpoint_namespace"] == "ebs64"
         assert cfg["checkpoints"]["save_every_steps"] == 64
         assert cfg["training"]["effective_batch_size"] == 64
         assert cfg["training"]["learning_rate"] == pytest.approx(4.0e-4)

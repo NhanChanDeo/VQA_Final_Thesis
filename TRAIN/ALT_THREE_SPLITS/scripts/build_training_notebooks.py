@@ -571,6 +571,7 @@ import torch
 MODEL_KEY = "smolvlm_500m"       # Primary: "smolvlm_500m" | Scale 2B: "smolvlm_base" | Cross-Arch: "qwen2_vl_2b"
 HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
+EPOCHS = 1                       # 1 interleaved epoch (~70.8k samples, ~1,106 opt steps) matches 2-ep single-domain budget
 SAVE_EVERY_STEPS = 64
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None
@@ -580,6 +581,7 @@ cmd = [
     "--exp", "B3",
     "--model", MODEL_KEY,
     "--seed", str(SEED),
+    "--epochs", str(EPOCHS),
     "--hardware_profile", HARDWARE_PROFILE,
     "--local_data_dir", str(LOCAL_DATA_DIR),
     "--hf_ckpt_repo", "gamusa/crossvqa-checkpoints",
@@ -734,7 +736,7 @@ finally:
         "include_train_shards": True,
         "include_test_shards": False,
         "title": "# 05 — Few-Shot Target Scaling Matrix (`1%`, `5%`, `10%`, `25%` TextVQA — Hypothesis H4)\n\n"
-                 "Evaluates `B1`, `B4`, and `M2` across nested `image_id`-grouped stratified TextVQA subsets.",
+                 "Evaluates `B1` and `B4` across nested `image_id`-grouped stratified TextVQA subsets (`M2` deferred to Future Work in 2-week plan).",
         "run_code": """# ==============================================================================
 # 4. RUN FEW-SHOT SCALING MATRIX (1%, 5%, 10%, 25%)
 # ==============================================================================
@@ -747,7 +749,7 @@ MODEL_KEY = "smolvlm_500m"       # Primary full-matrix backbone for Hypothesis H
 HARDWARE_PROFILE = "auto"        # Options: "auto", "l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"
 SEED = 42
 FRACTIONS = [1, 5, 10, 25]
-METHODS = ["B1", "B4", "M2"]
+METHODS = ["B1", "B4"]           # Add "M2" only if executing deferred Dual-LoRA prototype
 SAVE_EVERY_STEPS = 64
 MAX_TRAIN_STEPS = None
 MAX_EVAL_SAMPLES = None

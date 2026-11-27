@@ -56,7 +56,7 @@ EVALUATION/ALT_THREE_SPLITS/
 
 ### Key Architectural Principles
 1. **Relative Path Discipline:** Configs, scripts, and notebooks resolve paths relative to the repository root (`DATA_PIPELINE/...`, `TRAIN/...`, `EVALUATION/...`).
-2. **Ephemeral Colab Resilience:** Parquet shards (`train`, `validation`, `test`) stage directly to Colab NVMe (`/content/data/`), while adapters + `resume_state.pt` sync every `save_every_steps=64` optimizer steps (and at epoch end) to private HF Hub (`gamusa/crossvqa-checkpoints`, namespace `ebs64`) and Google Drive (`/content/drive/MyDrive/CrossVQA_Checkpoints/ALT_THREE_SPLITS`).
+1. **Epistemic / Ephemeral Colab Resilience:** Parquet shards (`train`, `validation`, `test`) stage directly to Colab NVMe (`/content/data/`), while adapters + `resume_state.pt` sync every `save_every_steps=64` optimizer steps (and at epoch end) to private HF Hub (`gamusa/crossvqa-checkpoints`, baseline namespace `ebs64_v2`) and Google Drive (`/content/drive/MyDrive/CrossVQA_Checkpoints/ALT_THREE_SPLITS`).
 3. **Zero Token Exposure:** Colab notebooks read `HF_TOKEN` and optional `GH_TOKEN` via `google.colab.userdata` or masked `getpass` prompts; Drive log mirroring excludes `checkpoints/` and binary weight extensions.
 
 ---
@@ -78,8 +78,8 @@ EVALUATION/ALT_THREE_SPLITS/
 * `smolvlm_base` and `qwen2_vl_2b` enable 4-bit NF4 QLoRA on the LLM decoder only, exempting `["vision_model", "connector"]` (SmolVLM) or `["visual", "merger"]` (Qwen2-VL).
 * Standard LoRA (`r=16, lora_alpha=32, lora_dropout=0.05`) targets `["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]` while excluding `["vision_model", "visual"]`.
 
-### 2.3 Hardware Profiles & `ebs64` Hyperparameters (`backbones.yaml`, `baselines_B1_B5.yaml`, `trainer.py`)
-`resolve_hardware_profile("auto")` selects from `preferred_order: ["l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"]`, targeting **effective batch size = 64** (`checkpoint_namespace: "ebs64"`), `learning_rate = 4.0e-4`, cosine schedule with `warmup_ratio = 0.05`, `weight_decay = 0.01`, `max_grad_norm = 1.0`, `max_new_tokens = 32`, `epochs = 2`, and `smolvlm_longest_edge = 1536`:
+### 2.3 Hardware Profiles & `ebs64` / `ebs64_v2` Hyperparameters (`backbones.yaml`, `baselines_B1_B5.yaml`, `trainer.py`)
+`resolve_hardware_profile("auto")` selects from `preferred_order: ["l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"]`, targeting **effective batch size = 64** (`checkpoint_namespace: "ebs64_v2"` in `baselines_B1_B5.yaml` for post-EOS-fix runs; `"ebs64"` in prototype `crossvqa_M1_M3.yaml`), `learning_rate = 4.0e-4`, cosine schedule with `warmup_ratio = 0.05`, `weight_decay = 0.01`, `max_grad_norm = 1.0`, `max_new_tokens = 32`, `epochs = 2`, and `smolvlm_longest_edge = 1536`:
 
 | Profile | Trigger (VRAM / SM) | Dtype / 4-bit | Grad Ckpt | Train BS $\times$ Accum (Eff=64) | Eval BS | `max_pixels` (Qwen2-VL) | Optimizer |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :--- |
