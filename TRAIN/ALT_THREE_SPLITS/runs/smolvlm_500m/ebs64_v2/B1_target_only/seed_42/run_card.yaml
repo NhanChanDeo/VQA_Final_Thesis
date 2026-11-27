@@ -1,0 +1,34 @@
+experiment:
+  id: B1_smolvlm_500m_seed42
+  exp: B1
+  seed: 42
+  git_sha: 90d1bf0
+data:
+  regime: alt_three_splits
+  revision: three-splits
+  few_shot_pct: 100
+  include_ocr: false
+model:
+  backbone: HuggingFaceTB/SmolVLM-500M-Base
+  architecture_mode: standard_lora
+  lora_r: 16
+  lora_alpha: 32
+training:
+  hardware_profile: t4_16gb
+  checkpoint_namespace: ebs64_v2
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 8
+  effective_batch_size: 64
+  epochs: 2
+  lr: 0.0004
+  elapsed_sec: 66219.77
+evaluation_results:
+  docvqa_anls: 0.441854
+  docvqa_vqa_accuracy: 0.125119
+  textvqa_anls: 0.702392
+  textvqa_vqa_accuracy: 0.540676
+  harmonic_mean: 0.486295
+  selection_score: 0.540676
+meta:
+  stage1_adapter_used: null
+  resumed_from: null
