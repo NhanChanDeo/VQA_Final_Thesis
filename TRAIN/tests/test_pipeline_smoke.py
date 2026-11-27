@@ -1313,3 +1313,119 @@ def test_mega_batch_resolution_bucketing_and_fused_adamw(tmp_path):
         assert _resolve_loader_settings(2, use_cuda=True, is_eval=False) == (2, 2, True)
     finally:
         trainer_mod._get_host_ram_gb = orig_ram_fn
+
+
+def test_phase_c_test_eval_targets_and_phase_d_suite(tmp_path):
+    scripts_dir = str(REPO_ROOT / "TRAIN/ALT_THREE_SPLITS/scripts")
+    eval_dir = str(REPO_ROOT / "EVALUATION/ALT_THREE_SPLITS")
+    for p in (scripts_dir, eval_dir):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    import eval_test_checkpoints as etc
+    import evaluate_statistical_suite as ess
+    import sample_error_taxonomy as setax
+
+    # 1. Verify eval_test_checkpoints target resolution & CLI parsing
+    parsed = etc.parse_args(["--model", "smolvlm_500m", "--exps", "Z0", "B1", "B2", "B4", "--few_shot_pcts", "5", "100"])
+    assert parsed.eval_split == "test"
+    targets = etc.resolve_eval_targets(
+        exps=parsed.exps,
+        few_shot_pcts=parsed.few_shot_pcts,
+        runs_root=str(tmp_path / "runs"),
+        model="smolvlm_500m",
+        seed=42,
+        checkpoint_namespace="ebs64",
+    )
+    assert [(t["exp"], t["few_shot_pct"], t["arch_mode"]) for t in targets] == [
+        ("Z0", 100, "none"),
+        ("B1", 5, "standard_lora"),
+        ("B1", 100, "standard_lora"),
+        ("B2", 100, "standard_lora"),
+        ("B4", 5, "standard_lora"),
+        ("B4", 100, "standard_lora"),
+    ]
+
+    # 2. Verify Phase D statistical suite (Bootstrap CIs, paired permutation p-values, TG/FR, LaTeX/MD export)
+    runs_root = tmp_path / "runs"
+
+    def _write_preds(run_dir: Path, doc_scores, tv_scores):
+        run_dir.mkdir(parents=True, exist_ok=True)
+        with (run_dir / "preds_test_docvqa.jsonl").open("w", encoding="utf-8") as f:
+            for i, s in enumerate(doc_scores):
+                f.write(
+                    json.dumps(
+                        {
+                            "sample_id": f"doc_{i}",
+                            "question": f"doc q {i}?",
+                            "prediction": f"pred_{i}",
+                            "answers": ["ans"],
+                            "anls": s,
+                            "vqa_accuracy": 0.0,
+                        }
+                    )
+                    + "\n"
+                )
+        with (run_dir / "preds_test_textvqa.jsonl").open("w", encoding="utf-8") as f:
+            for i, s in enumerate(tv_scores):
+                f.write(
+                    json.dumps(
+                        {
+                            "sample_id": f"tv_{i}",
+                            "question": f"tv q {i}?",
+                            "prediction": f"pred_{i}",
+                            "answers": ["ans"],
+                            "anls": s,
+                            "vqa_accuracy": s,
+                        }
+                    )
+                    + "\n"
+                )
+
+    _write_preds(ess.resolve_run_dir(runs_root, "smolvlm_500m", "ebs64", "Z0", 42), [0.0] * 12, [0.2] * 12)
+    _write_preds(ess.resolve_run_dir(runs_root, "smolvlm_500m", "ebs64", "B1", 42), [0.1] * 12, [0.5] * 12)
+    _write_preds(ess.resolve_run_dir(runs_root, "smolvlm_500m", "ebs64", "B2", 42), [0.8] * 12, [0.3] * 12)
+    _write_preds(ess.resolve_run_dir(runs_root, "smolvlm_500m", "ebs64", "B4", 42), [0.2] * 12, [0.75] * 12)
+    _write_preds(ess.resolve_run_dir(runs_root, "smolvlm_500m", "ebs64", "B1", 42, few_shot_pct=5), [0.1] * 12, [0.25] * 12)
+    _write_preds(ess.resolve_run_dir(runs_root, "smolvlm_500m", "ebs64", "B4", 42, few_shot_pct=5), [0.2] * 12, [0.6] * 12)
+
+    out_dir = tmp_path / "eval_out"
+    summary = ess.run_suite(
+        runs_root=runs_root,
+        model="smolvlm_500m",
+        namespace="ebs64",
+        seed=42,
+        eval_split="test",
+        exps=["Z0", "B1", "B2", "B4"],
+        few_shot_pcts=[5, 100],
+        few_shot_exps=["B1", "B4"],
+        n_bootstrap=100,
+        n_permutations=200,
+        boot_seed=42,
+        out_dir=out_dir,
+    )
+    assert len(summary["main_results"]) == 4
+    b4_row = [r for r in summary["main_results"] if r["exp"] == "B4"][0]
+    assert pytest.approx(b4_row["tg_vs_b1"]["tg_point"], abs=1e-6) == 0.25
+    assert pytest.approx(b4_row["fr_vs_b2"]["fr_point"], abs=1e-6) == 0.60
+    assert b4_row["tg_vs_b1"]["p_value"] < 0.05
+    assert (out_dir / "main_results_table.md").exists()
+    assert (out_dir / "main_results_table.tex").exists()
+    assert (out_dir / "few_shot_table.md").exists()
+
+    # 3. Verify stratified error taxonomy worksheet export
+    b4_dir = ess.resolve_run_dir(runs_root, "smolvlm_500m", "ebs64", "B4", 42)
+    # Include both zero_score and partial_below_threshold failures
+    _write_preds(b4_dir, [0.0, 0.3, 0.0, 0.4, 0.9, 0.0], [0.0, 0.33, 0.0, 1.0, 0.0, 0.33])
+    err_csv = out_dir / "errors.csv"
+    err_rows = setax.export_error_worksheet(
+        doc_jsonl=b4_dir / "preds_test_docvqa.jsonl",
+        text_jsonl=b4_dir / "preds_test_textvqa.jsonl",
+        out_csv=err_csv,
+        n_per_domain=3,
+        threshold=0.5,
+        seed=42,
+    )
+    assert len(err_rows) == 6
+    assert {r["error_tier"] for r in err_rows} == {"zero_score", "partial_below_threshold"}
+    assert err_csv.exists()

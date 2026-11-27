@@ -1,16 +1,15 @@
 # CrossVQA Phase C — Training Pipeline Architecture & Technical Rationale
 
-> **Document Type:** End-to-End Training Pipeline Specification & Methodological Rationale  
-> **Directory Scope:** `TRAIN/src/` & `TRAIN/ALT_THREE_SPLITS/`  
-> **Target Canonical Datasets:** `gamusa/docvqa-canonical@three-splits` & `gamusa/textvqa-canonical@three-splits`  
-> **Governing Format:** `.agents/rules/prompt-output-to-markdown.md` (`[HHMM]_[DDMMYYYY]_[filename].md` inside `TRAIN/`)  
-> **Timestamp:** `08:05` `22/11/2026` (`+07:00`)
+> **Document Type:** End-to-End Training & Evaluation Pipeline Specification  
+> **Directory Scope:** `TRAIN/src/`, `TRAIN/ALT_THREE_SPLITS/`, and `EVALUATION/ALT_THREE_SPLITS/`  
+> **Locked Canonical Datasets:** `gamusa/docvqa-canonical@three-splits` & `gamusa/textvqa-canonical@three-splits`  
+> **Revision Note (2026-11-27):** Synced hardware profiles with live `ebs64` configs, documented the `collator.py` EOS-safe padding fix (`attention_mask == 0`), added Phase C/D `test` evaluation & statistical scripts, and defined the **2-Week Active Scope (`Option A`: `Z0, B1–B4, Few-Shot`, with `M1–M3` retained as Implemented Architectural Prototype / Future Work)**.
 
 ---
 
 ## 1. Executive Architecture & Directory Layout
 
-The training system cleanly separates **regime-agnostic core ML modules** (`TRAIN/src/`) from **split-specific configurations, CLI entrypoints, Colab runners, and experiment logs** (`TRAIN/ALT_THREE_SPLITS/`). This lets `TRAIN/VALIDATION_AS_TEST/` reuse the exact same model, collator, loss, and trainer implementations without code duplication.
+The training and evaluation codebase separates **regime-agnostic core ML modules** (`TRAIN/src/`) from **split-specific configurations, CLI runners, Colab notebooks, and experiment logs** (`TRAIN/ALT_THREE_SPLITS/`, `EVALUATION/ALT_THREE_SPLITS/`).
 
 ```text
 DATA_PIPELINE/ALT_THREE_SPLITS/splits/
@@ -23,15 +22,15 @@ TRAIN/
 ├── src/                                     # Shared core library (regime-agnostic)
 │   ├── __init__.py
 │   ├── dataset.py                           # Local NVMe Parquet / HF streaming + B3 & M1-M3 samplers
-│   ├── collator.py                          # Image placeholders, answer-only label masking, EOS, domain IDs
+│   ├── collator.py                          # Image placeholders, answer-only label masking, EOS-safe padding
 │   ├── models.py                            # Locked backbone loader, selective 4-bit NF4, PEFT/Dual-LoRA
-│   ├── adapters.py                          # M1: DualLoRALinear + VisualSoftDomainRouter
-│   ├── losses.py                            # M2: MultiKernelRBFMMDLoss, InfoNCE, FIFO Queue, Proxy A-dist
-│   ├── augmentations.py                     # M3: CurriculumPseudoDomainTransform (homography/shadow/blur)
+│   ├── adapters.py                          # Prototype M1: DualLoRALinear + VisualSoftDomainRouter
+│   ├── losses.py                            # Prototype M2 & Phase A9: RBF MMD, InfoNCE, FIFO Queue, Proxy A-dist
+│   ├── augmentations.py                     # Prototype M3: CurriculumPseudoDomainTransform
 │   ├── trainer.py                           # Hardware profiles (L4/T4), CheckpointManager, CrossVQATrainer
 │   └── metrics.py                           # ANLS, VQA Accuracy, TG, FR, JSONL predictions, Run Cards
 ├── tests/
-│   └── test_pipeline_smoke.py               # Offline CPU verification suite
+│   └── test_pipeline_smoke.py               # Offline CPU verification suite (all unit + smoke tests)
 └── ALT_THREE_SPLITS/
     ├── README.md
     ├── configs/                             # Locked YAML specifications
@@ -44,130 +43,110 @@ TRAIN/
     │   ├── generate_few_shot_splits.py
     │   ├── run_z0_domain_gap.py
     │   ├── run_baseline.py
-    │   ├── run_crossvqa.py
+    │   ├── run_crossvqa.py                  # Prototype M1-M3 runner (deferred in 2-week plan)
+    │   ├── eval_test_checkpoints.py         # Held-out NEW_test evaluation across saved checkpoints
     │   └── build_training_notebooks.py
-    ├── notebooks/                           # Ephemeral Colab GPU notebooks (00..05)
-    └── runs/                                # Lightweight Git-tracked metrics, logs & UMAP plots only
+    ├── notebooks/                           # Colab GPU notebooks (00..05 + split 01_B1/01_B2)
+    └── runs/                                # Git-tracked metrics, JSONL logs & UMAP plots (weights gitignored)
+
+EVALUATION/ALT_THREE_SPLITS/
+├── evaluate_statistical_suite.py            # Offline 95% Bootstrap CIs, paired permutation p-values, LaTeX tables
+└── sample_error_taxonomy.py                 # Stratified 200-sample E1-E7 error taxonomy worksheet builder
 ```
 
 ### Key Architectural Principles
-1. **Relative Path Discipline:** Every config, script, and notebook resolves paths relative to the repository root (`DATA_PIPELINE/...`, `TRAIN/...`), ensuring portability across Windows workstations and Linux Colab VMs.
-2. **Ephemeral Colab Resilience:** Colab VMs provide fast NVMe scratch (`/content/data/`) but can disconnect unexpectedly. Raw Parquet shards are downloaded directly to `/content/data/` (avoiding slow Google Drive FUSE dataset I/O), while trained adapter checkpoints (`*.safetensors`) are synced both to a **private Hugging Face Hub repository** (`gamusa/crossvqa-checkpoints`) and to **personal Google Drive** (`/content/drive/MyDrive/CrossVQA_Checkpoints/ALT_THREE_SPLITS`), excluded from Git via `.gitignore`.
-3. **Zero Token Exposure:** Colab notebooks read `HF_TOKEN` (and optional `GH_TOKEN`) via Colab Secrets (`userdata.get`) or masked `getpass.getpass()` prompts at runtime—no secret is ever written to source files, configs, or outputs.
+1. **Relative Path Discipline:** Configs, scripts, and notebooks resolve paths relative to the repository root (`DATA_PIPELINE/...`, `TRAIN/...`, `EVALUATION/...`).
+2. **Ephemeral Colab Resilience:** Parquet shards (`train`, `validation`, `test`) stage directly to Colab NVMe (`/content/data/`), while adapters + `resume_state.pt` sync every `save_every_steps=64` optimizer steps (and at epoch end) to private HF Hub (`gamusa/crossvqa-checkpoints`, namespace `ebs64`) and Google Drive (`/content/drive/MyDrive/CrossVQA_Checkpoints/ALT_THREE_SPLITS`).
+3. **Zero Token Exposure:** Colab notebooks read `HF_TOKEN` and optional `GH_TOKEN` via `google.colab.userdata` or masked `getpass` prompts; Drive log mirroring excludes `checkpoints/` and binary weight extensions.
 
 ---
 
-## 2. Locked Backbone Hierarchy & Quantization Strategy
+## 2. Locked Backbone Hierarchy & Hardware Profiles
 
 ### 2.1 Backbone Priority Order (`configs/backbones.yaml` & `src/models.py`)
 
-| Priority | Key | Hugging Face Repo ID | Architecture | Rationale in CrossVQA |
+| Priority | Key | Hugging Face Repo ID | Architecture | 2-Week Role |
 | :---: | :--- | :--- | :--- | :--- |
-| **1 (Primary)** | `smolvlm_500m` | `HuggingFaceTB/SmolVLM-500M-Base` | `Idefics3` (12L ViT + Pixel Shuffle + 32L Llama) | **Primary Experimental Workhorse:** Pure `bf16`/`fp16` LoRA (`allow_4bit=false`), high T4/L4 throughput, non-saturated `Z0` floor, and 3-seed + full ablation coverage (`Z0`, `B1–B5`, `M1–M3`, Few-Shot). |
-| **2 (Secondary 1)** | `smolvlm_base` | `HuggingFaceTB/SmolVLM-Base` | `Idefics3` (27L ViT + Pixel Shuffle + 24L SmolLM2) | **Intra-Family Scale Control (2.2B):** Shared `Idefics3` tile-splitting topology vs `smolvlm_500m`; tests whether scale changes `B1–B5`/`M2` transfer dynamics (`Z0`, `B1`, `B2`, `B4`, `M2`). |
-| **3 (Secondary 2)** | `qwen2_vl_2b` | `Qwen/Qwen2-VL-2B` | 32L ViT + 2×2 Merger + 28L Qwen2 (M-RoPE) | **Cross-Architecture & Saturation Anchor:** Native dynamic resolution without tiling; high pre-trained OCR baseline (`Z0` pilot `0.9458` DocVQA ANLS / `0.8153` TextVQA Acc) serves as a saturation reference (`Z0`, `B1`, `B2`, `B4`, `M2`). |
+| **1 (Primary)** | `smolvlm_500m` | `HuggingFaceTB/SmolVLM-500M-Base` | `Idefics3` (12L ViT + Pixel Shuffle + 32L Llama) | **Active 2-Week Training Backbone (`Z0, B1–B4, Few-Shot`):** Pure `bf16`/`fp16` LoRA (`allow_4bit=false`), non-saturated `Z0` floor (`0.0059` DocVQA ANLS / `0.1963` TextVQA Acc). |
+| **2 (Secondary 1)** | `smolvlm_base` | `HuggingFaceTB/SmolVLM-Base` | `Idefics3` (27L ViT + Pixel Shuffle + 24L SmolLM2) | **Deferred (2-Week Cut):** Intra-family 2.2B scale control (`allow_4bit=true`). |
+| **3 (Secondary 2)** | `qwen2_vl_2b` | `Qwen/Qwen2-VL-2B` | 32L ViT + 2×2 Merger + 28L Qwen2 (M-RoPE) | **Saturation Reference (`Z0` Complete):** High zero-shot OCR (`0.9458` DocVQA ANLS / `0.8153` TextVQA Acc) establishes capacity ceiling; fine-tuning deferred. |
 
-* **Contamination Hygiene:** All three checkpoints are **Base** (pre-trained only, non-`-Instruct`) checkpoints. Evaluating `Z0` first on `NEW_validation` and `NEW_test` establishes the unadapted floor and audits pre-training memorization.
+* **Contamination Hygiene:** All three checkpoints are **Base** (non-`-Instruct`) checkpoints.
 
 ### 2.2 Selective 4-Bit NF4 Quantization & Vision Module Parity
-Quantizing early patch/projection weights in the vision encoder degrades legibility of small 6–8 pt characters in DocVQA scans. Therefore:
-* `smolvlm_500m` disables 4-bit quantization (`allow_4bit=false`) and always runs pure `bfloat16` (SM $\ge$ 8.0) or `float16` (T4 SM 7.5) LoRA.
-* `smolvlm_base` and `qwen2_vl_2b` apply 4-bit NF4 QLoRA **only to the LLM decoder**, explicitly exempting the vision encoder and multimodal connector (`llm_int8_skip_modules=["visual", "merger"]` for Qwen2-VL; `["vision_model", "connector"]` for SmolVLM).
-* Both `standard_lora` (`B1–B5`) and `DualLoRALinear` (`M1–M3`) exclude vision/connector projections (`exclude_modules=["vision_model", "visual"]`) so parameter budgets stay strictly comparable across architectures.
-* `SmolVLM` image processors enforce `size={"longest_edge": ...}` (`1536` on T4, `2048` on L4/A100/G4) to balance document readability and VRAM.
+* `smolvlm_500m` sets `allow_4bit: false` and trains in pure `bfloat16` (SM $\ge 8.0$) or `float16` (T4 SM $7.5$).
+* `smolvlm_base` and `qwen2_vl_2b` enable 4-bit NF4 QLoRA on the LLM decoder only, exempting `["vision_model", "connector"]` (SmolVLM) or `["visual", "merger"]` (Qwen2-VL).
+* Standard LoRA (`r=16, lora_alpha=32, lora_dropout=0.05`) targets `["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]` while excluding `["vision_model", "visual"]`.
 
-### 2.3 Hardware Profiles (`l4_24gb` Primary, `a100_40gb` Second, `g4_96gb`, `t4_16gb` Fallback)
-`resolve_hardware_profile("auto")` inspects CUDA VRAM and compute capability (SM) following `preferred_order: ["l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"]`:
-* **Primary (`l4_24gb`, VRAM $\ge$ 20 GB & SM $\ge$ 8.0):** Uses `bfloat16`, 4-bit NF4, `flash_attention_2` (when installed, else `sdpa`), `batch_size=4`, `grad_accum=4` (effective batch `16`), `eval_batch_size=8`, and `max_pixels=1,310,720`.
-* **Second (`a100_40gb`, VRAM $\ge$ 36 GB & SM $\ge$ 8.0):** Scales to `batch_size=8`, `grad_accum=2`, `eval_batch_size=16`, and `max_pixels=1,572,864` to leverage A100 HBM2e bandwidth.
-* **High-VRAM (`g4_96gb`, VRAM $\ge$ 85 GB & SM $\ge$ 10.0, Blackwell RTX PRO 6000):** Runs pure `bfloat16` LoRA (`load_in_4bit=false`, `optim="adamw"`) with `batch_size=16`, `grad_accum=1`, `eval_batch_size=32`, and `max_pixels=2,097,152`.
-* **Fallback (`t4_16gb`, 16 GB T4):** Automatically switches to `float16`, `sdpa`, `batch_size=2`, `grad_accum=8` (effective batch `16`), `eval_batch_size=4`, `max_pixels=1,048,576`, and `paged_adamw_8bit` to prevent OOM spikes.
+### 2.3 Hardware Profiles & `ebs64` Hyperparameters (`backbones.yaml`, `baselines_B1_B5.yaml`, `trainer.py`)
+`resolve_hardware_profile("auto")` selects from `preferred_order: ["l4_24gb", "a100_40gb", "g4_96gb", "t4_16gb"]`, targeting **effective batch size = 64** (`checkpoint_namespace: "ebs64"`), `learning_rate = 4.0e-4`, cosine schedule with `warmup_ratio = 0.05`, `weight_decay = 0.01`, `max_grad_norm = 1.0`, `max_new_tokens = 32`, `epochs = 2`, and `smolvlm_longest_edge = 1536`:
 
----
+| Profile | Trigger (VRAM / SM) | Dtype / 4-bit | Grad Ckpt | Train BS $\times$ Accum (Eff=64) | Eval BS | `max_pixels` (Qwen2-VL) | Optimizer |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :--- |
+| **`l4_24gb`** *(Primary)* | $\ge 20\text{ GB}$, $\text{SM} \ge 8$ | `bf16` / NF4* | `True` | `16 × 4` | `16` | `1,310,720` | `adamw_torch_fused` |
+| **`a100_40gb`** | $\ge 36\text{ GB}$, $\text{SM} \ge 8$ | `bf16` / NF4* | `False` | `16 × 4` | `16` | `1,572,864` | `adamw_torch_fused` |
+| **`g4_96gb`** | $\ge 85\text{ GB}$, $\text{SM} \ge 10$ | `bf16` / `False` | `False` | `16 × 4` | `32` | `2,097,152` | `adamw_torch_fused` |
+| **`t4_16gb`** *(Fallback)* | $< 20\text{ GB}$ | `fp16` / NF4* | `True` | `8 × 8` | `8` | `1,048,576` | `paged_adamw_8bit` |
 
-## 3. Multimodal Data Processing & Prompt Engineering (`src/dataset.py`, `src/collator.py`)
-
-### 3.1 Dual-Source Ingestion & Domain Pairing
-* **NVMe-First Loading:** `load_crossvqa_dataset()` reads `data/{split}-*.parquet` locally from `/content/data/{docvqa,textvqa}` when staged on Colab NVMe, and falls back to streaming `gamusa/*-canonical@three-splits` otherwise.
-* **Experiment-Specific Samplers:**
-  * `InterleavedCrossVQADataset` (**B3 Joint**): Interleaves DocVQA and TextVQA with `doc_prob=0.5`.
-  * `PairedDomainDataset` (**M1–M3**): Emits alternating `(doc_sample, scene_sample)` pairs so every training micro-batch ($B \ge 2$) contains both domains (`domain_id = 0` for `document_text`, `1` for `scene_text`).
-
-### 3.2 Prompt Conditioning, Label Masking & EOS Discipline
-* **Track A (Primary — OCR-Free):** Default across all `Z0`, `B1–B5`, `M1–M3`, and few-shot runs (`--include_ocr` omitted). Isolates true visual-reading transfer without external OCR leakage.
-* **Track B (Targeted Ablation — Given-OCR):** Enabled via `--include_ocr` on `B1` and `M2` (`max_ocr_tokens=50`), formatting pre-harmonized `ocr_tokens` and `[ymin, xmin, ymax, xmax]` boxes in `[0, 1000]`.
-* **Critical Collator Guarantees:**
-  1. Model-appropriate visual tokens are always prepended (`apply_chat_template` / `<|vision_start|><|image_pad|><|vision_end|>` for Qwen2-VL; `<image>` for SmolVLM).
-  2. During training (`padding_side="right"`), `prompt_inputs` and `full_inputs` (`prompt + " " + target + eos_token`) are aligned so **all padding tokens AND all visual + question prompt tokens are masked to `-100`** in `labels`. The causal LM loss trains strictly on the answer tokens and `eos_token` so greedy generation terminates cleanly.
-  3. During evaluation (`padding_side="left"`), batched `model.generate(..., do_sample=False)` slices tokens starting strictly from `input_ids.shape[1]`.
+*\*Note: `smolvlm_500m` overrides `load_in_4bit` to `False` (`allow_4bit: false`). On `Z0` inference (`run_z0_domain_gap.py`), `load_in_4bit=False` is the default and `eval_batch_size` auto-doubles on L4/A100/G4.*
 
 ---
 
-## 4. Experimental Matrix & Proposed CrossVQA Method (`Z0`, `B1–B5`, `M1–M3`)
+## 3. Multimodal Data Processing & Collator Guarantees (`dataset.py`, `collator.py`)
 
-### 4.1 Phase A Diagnostics & Baselines (`run_z0_domain_gap.py`, `run_baseline.py`)
-* **Z0 (Zero-Shot + A8/A9):** Evaluates frozen base VLM on `NEW_validation` (and optional `NEW_test`), extracts pooled visual-projector embeddings ($N=794$ `image_id`-deduplicated samples/domain, balanced across domains), projects 2D **UMAP** (`A8`), and computes **RKHS MMD** and 5-fold stratified Linear **Proxy $\mathcal{A}$-distance** (`A9`: $\hat{d}_{\mathcal{A}} = 2(1 - 2\epsilon)$) to test **Hypothesis H1**. Partial evaluation runs merge non-destructively into `val_metrics.json`.
-  * **Tier 1 Exact-Parity Z0 Optimizations:**
-    1. **Pure `bf16`/`fp16` Inference (`load_in_4bit=False` default in `run_z0_domain_gap.py`):** Eliminates per-token BitsAndBytes NF4 dequantization overhead and auto-doubles `eval_batch_size` on `l4_24gb` (`8 -> 16`), `a100_40gb` (`16 -> 32`), and `g4_96gb` (`32 -> 64`); pass `--load_in_4bit` only if needed.
-    2. **Stage A/B Validation Fusion (`evaluate_both_domains` in `_common.py`):** Captures `image_id`-deduplicated, L2-normalized pooled visual-projector embeddings directly during `validation` `generate()` prefill (using exact per-sample tile counts from `pixel_attention_mask` / 5D `pixel_values` for `Idefics3`), eliminating Stage B's duplicate image decoding and redundant LLM forward passes. When standalone `extract_domain_embeddings()` is invoked (e.g. `domain_gap_only` or `max_eval_samples < domain_gap_samples`), a `_ProjectorCaptured` sentinel hook exits right after the visual projector so downstream LLM decoder layers are skipped.
-    3. **Memory-Mapped Local Arrow + Multi-Worker `DataLoader` + Resolution Bucketing (`run_evaluation` in `src/trainer.py`):** Loads local NVMe Parquet shards with `streaming=False`, prefetches/collates via `DataLoader` (`num_workers=4` on Linux+CUDA, `pin_memory=True`), sorts evaluation indices by image pixel area (via metadata or lazy PIL header parsing) to minimize left-padding waste, restores exact original sample order on return, and runs under `torch.inference_mode()`.
-    4. **GPU-Accelerated RKHS MMD (`compute_rkhs_mmd` in `src/losses.py`):** Computes the multi-kernel RBF distance matrices on CUDA when available instead of CPU.
-* **B1 (Target-Only):** LoRA on TextVQA `train` (reference target bound).
-* **B2 (Source-Only):** LoRA on DocVQA `train` (evaluates OOD zero-shot transfer to TextVQA, **H2**).
-* **B3 (Joint):** Shared LoRA on interleaved DocVQA + TextVQA (audits negative transfer).
-* **B4 (Sequential `Doc -> Text`):** Restores `B2` adapter and fine-tunes on TextVQA (measures catastrophic forgetting $\text{FR}$, **H3**).
-* **B5 (Reverse Sequential `Text -> Doc`):** Restores `B1` adapter and fine-tunes on DocVQA (measures directional asymmetry).
+### 3.1 Dual-Source Ingestion & Resolution Bucketing
+* **NVMe-First Loading:** `load_crossvqa_dataset()` reads `data/{split}-*.parquet` from `--local_data_dir` (Colab `/content/data/{docvqa,textvqa}`) with Arrow memory mapping and falls back to HF streaming otherwise.
+* **Experiment Samplers:** `InterleavedCrossVQADataset` (`B3 Joint`, `doc_prob=0.5`) and `PairedDomainDataset` (`M1–M3` prototype). Map-style datasets use deterministic mega-batch resolution bucketing (`group_by_resolution=True`) aligned to `batch_size` boundaries for exact O(1) mid-epoch resume.
 
-### 4.2 Proposed CrossVQA Architecture (`src/adapters.py`, `src/losses.py`, `src/augmentations.py`, `run_crossvqa.py`)
-
-```mermaid
-flowchart LR
-    IMG["Input Image"] --> VE["Frozen Vision Encoder + Projector (visual.merger / connector)"]
-    VE --> POOL["Mean-Pooled Visual Tokens h_vis (B x D)"]
-    POOL --> ROUTER["VisualSoftDomainRouter (MLP -> softmax / tau)"]
-    POOL --> ALIGN["M2: Multi-Kernel RBF MMD / InfoNCE + FIFO Queue"]
-    ROUTER -->|"w_doc, w_scene"| LLM["Frozen LLM + DualLoRALinear (A_doc, A_scene)"]
-    TXT["Question Tokens"] --> LLM
-    LLM --> LGEN["L_gen (Answer-Only Causal LM)"]
-    ROUTER --> LGATE["L_gate (Domain Router CE)"]
-    ALIGN --> LALIGN["L_align"]
-    LGEN --> LTOT["L_total = L_gen + lambda_align * L_align + lambda_gate * L_gate"]
-    LALIGN --> LTOT
-    LGATE --> LTOT
-```
-
-1. **M1 — Dual Domain-Specific LoRA + Visual Soft Gating Router (`adapters.py`):**
-   * Standard PEFT `set_adapter()` cannot mix two adapters with different per-sample weights within a single mixed-domain batch. `DualLoRALinear` wraps each LLM attention/MLP projection (`q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`) with parallel branches `(lora_A_doc, lora_B_doc)` and `(lora_A_scene, lora_B_scene)`:
-     $$y = W_0 x + w_{\text{doc}}(h_{\text{vis}}) \cdot \frac{\alpha}{r} B_{\text{doc}} A_{\text{doc}}(\text{drop}(x)) + w_{\text{scene}}(h_{\text{vis}}) \cdot \frac{\alpha}{r} B_{\text{scene}} A_{\text{scene}}(\text{drop}(x))$$
-   * **Stage 1 (`doc_only`):** Trains $\mathcal{A}_{\text{doc}}$ + router on DocVQA (`forced_domain_id=0`).
-   * **Stage 2 (`scene_only_frozen_doc`):** Freezes $\mathcal{A}_{\text{doc}}$ completely to prevent catastrophic forgetting (**RQ3 / H3**) while training $\mathcal{A}_{\text{scene}}$ + router on paired DocVQA + TextVQA data.
-
-2. **M2 — Cross-Domain Feature Alignment (`losses.py` & `adapters.py`):**
-   * Inserts a zero-initialized residual `ProjectorAlignmentAdapter` (`rank=64` in `M2`/`M3`, `0` in `M1`) directly after the frozen multimodal projector so $\mathcal{L}_{\text{align}}$ produces non-zero gradients on aligned `pooled_vis` representations while starting at exact identity.
-   * **Default (`MultiKernelRBFMMDLoss`):** Multi-bandwidth Gaussian RBF MMD ($\sigma \in \{0.5, 1.0, 2.0, 4.0, 8.0\}$) backed by dual-domain **FIFO `FeatureQueue` (`size=256`)**. The queue provides stable distributional statistics on 16–24 GB GPUs where `batch_size` is only 2–4, while gradients flow cleanly through current micro-batch features.
-   * **Ablation (`CrossDomainInfoNCELoss`):** Temperature-scaled (`0.07`) contrastive prototype alignment selectable via `--align_type infonce`.
-
-3. **M3 — Curriculum Pseudo-Domain Bridge (`augmentations.py`):**
-   * Inserts an intermediate Stage-2 curriculum epoch between Stage 1 (DocVQA) and Stage 3 (TextVQA), applying `CurriculumPseudoDomainTransform` to DocVQA images with linearly ramping severity ($0.2 \rightarrow 1.0$):
-     1. Random 3D perspective homography warp (`PIL.Image.Transform.PERSPECTIVE`)
-     2. Directional illumination gradient / soft shadow overlay
-     3. Mild Gaussian optical blur + JPEG artifact perturbation
-   * Bridges the 2D planar $\rightarrow$ 3D perspective gap smoothly (**H2 / H5**).
-
-### 4.3 Few-Shot Scaling Matrix (`generate_few_shot_splits.py`)
-To evaluate **Hypothesis H4** cleanly without data leakage, TextVQA `NEW_train` (`32,762` queries across `20,807` unique `image_id`s) is partitioned strictly at the `image_id` level—stratified by OCR token quartiles and questions-per-image—into nested subsets `1% ⊂ 5% ⊂ 10% ⊂ 25% ⊂ 100%` (`DATA_PIPELINE/ALT_THREE_SPLITS/splits/textvqa_few_shot_manifest.parquet`).
+### 3.2 Prompt Conditioning, Label Masking & EOS Preservation (`collator.py`)
+* **Track A (Primary — OCR-Free):** Default (`--include_ocr` omitted): `<image>\nQuestion: {question}\nAnswer:` (or Qwen2-VL chat template).
+* **Critical EOS-Safe Padding Mask (Fixed 2026-11-27):**
+  - On `HuggingFaceTB/SmolVLM-500M-Base`, **`pad_token_id == eos_token_id == 2` (`<|im_end|>`)**.
+  - Masking via `labels[labels == pad_id] = -100` previously erased the target `<|im_end|>` token on every sample, causing runaway greedy generation and metric collapse (`B1 textvqa_vqa_acc = 0.0`).
+  - `CrossVQADataCollator` now masks trailing padding strictly via **`labels[inputs["attention_mask"] == 0] = -100`** (falling back to `pad_id` only if `attention_mask` is absent and `pad_id != eos_id`), preserving `<|im_end|>` supervision on every example (verified by `test_collator_preserves_eos_when_pad_equals_eos`).
+* **Evaluation:** Uses `padding_side="left"`, `use_cache=True`, `do_sample=False`, `max_new_tokens=32`, slicing generated tokens from `input_ids.shape[1]`.
 
 ---
 
-## 5. Evaluation Metrics, Logging & Colab Workflow
+## 4. Experimental Matrix, Prototype Architecture & 2-Week Active Scope
 
-* **Checkpointing & Fault Tolerance (`CheckpointManager`):** Every epoch (and mid-epoch interval if enabled) pushes adapter weights (`dual_lora_weights.safetensors` / PEFT `adapter_model.safetensors`) + `trainer_state.json` to private `gamusa/crossvqa-checkpoints` AND copies them to mounted Google Drive. Passing `--resume_from_hub` automatically recovers interrupted Colab runs.
-* **Tracked Metrics (`metrics.py`):** Reports `docvqa_anls`, `textvqa_vqa_accuracy`, cross-metrics (`docvqa_vqa_accuracy`, `textvqa_anls`), `harmonic_mean`, **Transfer Gain** ($\text{TG} = \text{Score}_{\text{Model}} - \text{Score}_{\text{B1}}$), and **Forgetting Rate** ($\text{FR} = \text{ANLS}_{\text{B2}}(\text{Doc}) - \text{ANLS}_{\text{Model}}(\text{Doc})$) into `val_metrics.json`, `run_card.yaml`, and `preds_{split}_{domain}.jsonl` (ready for Phase D bootstrap CIs in `EVALUATION/ALT_THREE_SPLITS/`).
+### 4.1 Active 2-Week Empirical Matrix (`Z0`, `B1–B4`, Few-Shot)
+* **Z0 (`run_z0_domain_gap.py` — DONE):** Frozen zero-shot benchmark + UMAP (`A8`) + RKHS MMD and 5-fold Linear Proxy $\mathcal{A}$-distance (`A9`) testing **H1**.
+* **B1 (Target-Only — TextVQA `train`, 2 ep):** Reference target specialization bound (**H2, H4**).
+* **B2 (Source-Only — DocVQA `train`, 2 ep):** Tests OOD transfer `Doc -> Text` (**H2**) and provides `B2/best` for `B4` + $\text{ANLS}_{\text{B2}}$ for Forgetting Rate (**H3**).
+* **B4 (Sequential `Doc -> Text`, 2 ep):** Resumes from `B2/best` and fine-tunes on TextVQA; directly quantifies Catastrophic Forgetting ($\text{FR} = \text{ANLS}_{\text{B2}} - \text{ANLS}_{\text{B4}}$) (**H3**).
+* **B3 (Joint Interleaved LoRA, 1 ep $\approx 70.8\text{k}$ samples):** Tests whether joint multi-domain training mitigates sequential forgetting ($\text{FR}_{\text{B3}} < \text{FR}_{\text{B4}}$) vs. single-domain negative transfer (**H5, Revised**).
+* **Few-Shot Scaling (`1%, 5%, 10%, 25%` on `B1, B4`):** Evaluates whether relative transfer gain ($\text{TG}$) peaks under data scarcity (**H4**).
 
-### Colab Execution Order
-1. `00_Z0_ZeroShot_and_DomainGap.ipynb` (Frozen `Z0` + UMAP + MMD + Proxy $\mathcal{A}$-distance)
-2. `01_B1_B2_SingleDomain_LoRA.ipynb` (Run `B1` and `B2` across seeds `42, 123, 999`)
-3. `02_B3_Joint_MultiDomain_LoRA.ipynb`
-4. `03_B4_B5_Sequential_Transfer.ipynb` (Restores `B2` / `B1` automatically)
-5. `04_M1_M3_CrossVQA_Proposed.ipynb` (Full `M1–M3` matrix & 3 seeds on `smolvlm_500m`, plus `M2` cross-scale/cross-arch on `smolvlm_base` & `qwen2_vl_2b`)
-6. `05_FewShot_Scaling_Matrix.ipynb` (`1%, 5%, 10%, 25%` across `B1`, `B4`, `M2`)
+### 4.2 Implemented Architectural Prototype (`M1–M3` — Deferred in 2-Week Plan)
+The full Dual-LoRA + Feature Alignment + Curriculum Homography architecture remains implemented and tested (`test_pipeline_smoke.py`) in `TRAIN/src/{adapters,losses,augmentations}.py` and [`run_crossvqa.py`](ALT_THREE_SPLITS/scripts/run_crossvqa.py) as **Future Research / Architectural Extension**:
+* **M1 (`adapters.py`):** `DualLoRALinear` ($\mathcal{A}_{\text{doc}}, \mathcal{A}_{\text{scene}}$) + `VisualSoftDomainRouter` with frozen $\mathcal{A}_{\text{doc}}$ during Stage 2.
+* **M2 (`losses.py`):** Zero-initialized `ProjectorAlignmentAdapter` (`rank=64`) + `MultiKernelRBFMMDLoss` / `CrossDomainInfoNCELoss` with FIFO `FeatureQueue` (`size=256`).
+* **M3 (`augmentations.py`):** `CurriculumPseudoDomainTransform` (3D perspective homography, directional shadow, optical blur/JPEG severity ramp $0.2 \rightarrow 1.0$).
+
+### 4.3 Hypothesis Traceability & 2-Week Active Execution Scope
+
+| Hypothesis | Active 2-Week Verification Artifact | Est. L4 Cost (`smolvlm_500m`, `seed=42`) | Disposition |
+| :---: | :--- | :---: | :---: |
+| **H1 (RQ1)** | `Z0` UMAP, RKHS MMD (`0.919`), Proxy $\mathcal{A}$-dist (`1.992` / `2.000`) | **0h** | **DONE** |
+| **H2 (RQ2)** | `B2` (DocVQA-only) vs. `Z0` and `B1` (TextVQA-only) | **~23.5h** | **ACTIVE (P0)** |
+| **H3 (RQ2, RQ3)** | `B4` (Sequential `Doc -> Text`) Forgetting Rate $\text{FR}$ vs. `B2` | **~10.5h** | **ACTIVE (P0)** |
+| **H4 (RQ2)** | Few-Shot `1%, 5%, 10%, 25%` learning curves (`B1` vs. `B4`) | **~13.4h** | **ACTIVE (P0)** |
+| **H5 (RQ3, Revised)** | `B3` (Joint 1 ep) forgetting & negative-transfer audit vs. `B4, B1, B2` | **~11.5h** | **ACTIVE (P0)** |
+| **Phase D (`test`)** | `eval_test_checkpoints.py` + `evaluate_statistical_suite.py` + `sample_error_taxonomy.py` | **~3.0h GPU + Offline CPU** | **ACTIVE (P0)** |
+| *Extensions* | `M1–M3`, `B5`, 3-seed sweeps (`123, 999`), `smolvlm_base`/`qwen2_vl_2b` fine-tuning, Track B OCR, `VALIDATION_AS_TEST` | **0h** | **CUT / FUTURE WORK** |
+
+---
+
+## 5. Checkpointing, Evaluation & Colab Workflow (`trainer.py`, `EVALUATION/`)
+
+* **Triple-Redundant Checkpointing & O(1) Resume:** Saves `latest/` (`resume_state.pt` with optimizer, scheduler, RNG, `samples_seen_in_epoch`, and config fingerprint) every `64` optimizer steps and `best/` at epoch validation. Cross-GPU resume (e.g., T4 `PagedAdamW8bit` $\leftrightarrow$ L4 `adamw_torch_fused`) safely resets incompatible optimizer momentum while keeping weights, scheduler, and dataset position.
+* **Colab Notebooks (`TRAIN/ALT_THREE_SPLITS/notebooks/`):**
+  - `00_Z0_ZeroShot_and_DomainGap.ipynb` (Complete)
+  - `01_B1_TextVQA_Only_LoRA.ipynb` & `01_B2_DocVQA_Only_LoRA.ipynb` (Split single-domain runners with scoped Cell 5 loss/metric inspection)
+  - `02_B3_Joint_MultiDomain_LoRA.ipynb`, `03_B4_B5_Sequential_Transfer.ipynb`, `05_FewShot_Scaling_Matrix.ipynb`
+  - `04_M1_M3_CrossVQA_Proposed.ipynb` (Deferred prototype)
+* **Phase D Offline Evaluation (`EVALUATION/ALT_THREE_SPLITS/`):**
+  - [`eval_test_checkpoints.py`](ALT_THREE_SPLITS/scripts/eval_test_checkpoints.py) runs held-out `NEW_test` evaluation on `Z0` and saved `best` LoRA adapters.
+  - [`evaluate_statistical_suite.py`](../EVALUATION/ALT_THREE_SPLITS/evaluate_statistical_suite.py) computes ANLS, VQA Accuracy, Harmonic Mean, $\text{TG}$, $\text{FR}$, **95% Bootstrap CIs ($B=1,000$)**, and **paired permutation $p$-values**, exporting Markdown/LaTeX tables and learning-curve plots.
+  - [`sample_error_taxonomy.py`](../EVALUATION/ALT_THREE_SPLITS/sample_error_taxonomy.py) exports 200 stratified failures (`100` DocVQA + `100` TextVQA) for `E1–E7` manual error analysis.
