@@ -324,13 +324,23 @@ if PUSH_LOGS_TO_GITHUB:
     if status:
         subprocess.run(["git", "add", "TRAIN/ALT_THREE_SPLITS/runs/"], check=True)
         subprocess.run(["git", "commit", "-m", "chore(runs): sync Colab training metrics and logs"], check=False)
-        gh_token = os.environ.get("GH_TOKEN")
-        if gh_token:
-            remote_url = f"https://{gh_token}@github.com/NhanChanDeo/VQA_Final_Thesis.git"
+
+    gh_token = os.environ.get("GH_TOKEN")
+    if gh_token:
+        remote_url = f"https://{gh_token}@github.com/NhanChanDeo/VQA_Final_Thesis.git"
+        subprocess.run(["git", "fetch", remote_url, "main"], check=True)
+        ahead = int(subprocess.run(
+            ["git", "rev-list", "--count", "FETCH_HEAD..HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip() or "0")
+        if ahead > 0:
+            subprocess.run(["git", "rebase", "--autostash", "FETCH_HEAD"], check=True)
             subprocess.run(["git", "push", remote_url, "HEAD:main"], check=True)
             print("Synced lightweight logs to origin/main.")
         else:
-            print("GH_TOKEN not set in environment/Colab Secrets; skipped git push (committed locally).")
+            print("No new run artifacts to push.")
+    elif status:
+        print("GH_TOKEN not set in environment/Colab Secrets; skipped git push (committed locally).")
     else:
         print("No new run artifacts to commit.")
 
