@@ -1,0 +1,8 @@
+{
+  "docvqa_anls": 0.658481,
+  "docvqa_vqa_accuracy": 0.211822,
+  "textvqa_anls": 0.545861,
+  "textvqa_vqa_accuracy": 0.381702,
+  "harmonic_mean": 0.483268,
+  "selection_score": 0.658481
+}
