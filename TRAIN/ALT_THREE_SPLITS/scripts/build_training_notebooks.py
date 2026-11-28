@@ -438,8 +438,10 @@ NOTEBOOK_SPECS: List[Dict] = [
 # 4. RUN Z0 ZERO-SHOT + PHASE A8 UMAP + PHASE A9 MMD / PROXY A-DISTANCE
 # ==============================================================================
 import sys
+import shutil
 import time
 import traceback
+from pathlib import Path
 import torch
 from huggingface_hub import snapshot_download
 
@@ -515,8 +517,10 @@ finally:
 # 4. RUN B1 (TEXTVQA-ONLY) OR B2 (DOCVQA-ONLY) BASELINE
 # ==============================================================================
 import sys
+import shutil
 import time
 import traceback
+from pathlib import Path
 import torch
 
 EXP = "B1"                       # "B1" (TextVQA) or "B2" (DocVQA)
@@ -574,8 +578,10 @@ finally:
 # 4. RUN B3 (JOINT DOCVQA + TEXTVQA) BASELINE
 # ==============================================================================
 import sys
+import shutil
 import time
 import traceback
+from pathlib import Path
 import torch
 
 MODEL_KEY = "smolvlm_500m"       # Primary: "smolvlm_500m" | Scale 2B: "smolvlm_base" | Cross-Arch: "qwen2_vl_2b"
@@ -631,8 +637,10 @@ finally:
 # 4. RUN B4 (DOC -> TEXT) OR B5 (TEXT -> DOC) SEQUENTIAL TRANSFER
 # ==============================================================================
 import sys
+import shutil
 import time
 import traceback
+from pathlib import Path
 import torch
 
 EXP = "B4"                       # "B4" (Doc->Text) or "B5" (Text->Doc)
@@ -687,8 +695,10 @@ finally:
 # 4. RUN PROPOSED CROSSVQA (M1, M2, OR M3)
 # ==============================================================================
 import sys
+import shutil
 import time
 import traceback
+from pathlib import Path
 import torch
 
 EXP = "M2"                       # "M1" | "M2" | "M3"
@@ -751,8 +761,10 @@ finally:
 # 4. RUN FEW-SHOT SCALING MATRIX (1%, 5%, 10%, 25%)
 # ==============================================================================
 import sys
+import shutil
 import time
 import traceback
+from pathlib import Path
 import torch
 
 MODEL_KEY = "smolvlm_500m"       # Primary full-matrix backbone for Hypothesis H4
@@ -792,6 +804,15 @@ try:
                 cmd.extend(["--max_eval_samples", str(MAX_EVAL_SAMPLES)])
             print(f"\\n>>> Running {method} at {pct}% target TextVQA...")
             run_streamed(cmd)
+            if GDRIVE_BACKUP_DIR:
+                _drive_runs = Path(GDRIVE_BACKUP_DIR) / "runs_logs"
+                _drive_runs.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(
+                    "TRAIN/ALT_THREE_SPLITS/runs",
+                    _drive_runs,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("checkpoints", "*.safetensors", "*.pt", "*.pth", "*.bin", "*.ckpt"),
+                )
     RUN_SUCCEEDED = True
 except Exception as exc:
     print(f"ERROR during few-shot matrix execution: {exc}")

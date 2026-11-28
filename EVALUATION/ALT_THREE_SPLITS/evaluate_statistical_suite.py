@@ -378,7 +378,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Offline Phase D statistical evaluation suite.")
     parser.add_argument("--runs_root", default="TRAIN/ALT_THREE_SPLITS/runs")
     parser.add_argument("--model", default="smolvlm_500m")
-    parser.add_argument("--namespace", default="ebs64")
+    parser.add_argument("--namespace", default="ebs64_v2")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--eval_split", default="test", choices=["validation", "test"])
     parser.add_argument("--exps", nargs="+", default=["Z0", "B1", "B2", "B3", "B4"])

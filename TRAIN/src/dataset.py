@@ -7,6 +7,7 @@ Unified streaming and local NVMe dataset loader for CrossVQA:
 
 import io
 import itertools
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 import polars as pl
@@ -70,11 +71,14 @@ def load_crossvqa_dataset(
     if split_regime.lower() == "alt_three_splits":
         local_files = _find_local_split_files(local_data_dir, dataset_name, split) if local_data_dir else None
         if local_files:
+            num_proc = None if streaming else min(4, os.cpu_count() or 1)
+            dl_kwargs = {"num_proc": num_proc} if (num_proc and num_proc > 1 and len(local_files) > 1) else {}
             ds = load_dataset(
                 "parquet",
                 data_files={split: local_files},
                 split=split,
                 streaming=streaming,
+                **dl_kwargs,
             )
         else:
             ds = load_dataset(

@@ -1565,3 +1565,50 @@ def test_train_log_backup_and_resume_across_fresh_vm(tmp_path):
     vm1_post = [json.loads(l) for l in (vm1_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
     assert [r["opt_step"] for r in vm1_post] == list(range(1, 9))
 
+
+def test_best_epoch_preds_preserved_when_later_epoch_worse(tmp_path):
+    """Verify preds_validation_*.jsonl is restored to the best epoch if a later epoch scores lower."""
+
+    class _MapDataset(torch.utils.data.Dataset):
+        def __init__(self, n: int = 8) -> None:
+            self.items = [
+                {"domain_type": "document_text", "image": Image.new("RGB", (16, 16)), "question": f"q{i}?", "answers": ["ans"]}
+                for i in range(n)
+            ]
+
+        def __len__(self):
+            return len(self.items)
+
+        def __getitem__(self, idx):
+            return self.items[idx]
+
+    ds = _MapDataset(8)
+    proc = _DummyProcessor(with_chat_template=False)
+    run_dir = tmp_path / "run"
+    ckpt_mgr = CheckpointManager(local_ckpt_dir=str(run_dir / "checkpoints"), hf_repo_id=None, hf_token=None)
+    model = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    trainer = CrossVQATrainer(
+        model=model,
+        processor=proc,
+        run_dir=str(run_dir),
+        model_type="smolvlm",
+        device="cpu",
+        lr=1e-3,
+        gradient_accumulation_steps=1,
+        optim_name="adamw",
+        checkpoint_manager=ckpt_mgr,
+    )
+    scores = iter([0.80, 0.60])
+    ep_counter = {"n": 0}
+
+    def _eval_fn():
+        ep_counter["n"] += 1
+        sc = next(scores)
+        (run_dir / "preds_validation_docvqa.jsonl").write_text(f'{{"epoch": {ep_counter["n"]}}}\n', encoding="utf-8")
+        return {"selection_score": sc}
+
+    summary = trainer.fit(ds, epochs=2, batch_size=4, eval_fn=_eval_fn, seed=42)
+    assert summary["best_metrics"]["selection_score"] == 0.80
+    assert json.loads((run_dir / "preds_validation_docvqa.jsonl").read_text(encoding="utf-8").strip())["epoch"] == 1
+
+

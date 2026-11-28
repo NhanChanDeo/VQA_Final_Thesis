@@ -1006,6 +1006,7 @@ class CrossVQATrainer:
             return payload
 
         start_time = time.time()
+        best_pred_snapshots: Dict[Path, bytes] = {}
         for epoch in range(start_epoch, epochs + 1):
             skip_here = resume_skip_samples if epoch == start_epoch else 0
             samples_seen_in_epoch = skip_here
@@ -1185,6 +1186,11 @@ class CrossVQATrainer:
                 if is_best:
                     best_score = score
                     best_metrics = dict(val_metrics)
+                    for pred_p in self.run_dir.glob("preds_validation_*.jsonl"):
+                        best_pred_snapshots[pred_p] = pred_p.read_bytes()
+                elif best_pred_snapshots:
+                    for pred_p, raw_bytes in best_pred_snapshots.items():
+                        pred_p.write_bytes(raw_bytes)
                 self._save_checkpoint(
                     tag="latest",
                     trainer_state=state,

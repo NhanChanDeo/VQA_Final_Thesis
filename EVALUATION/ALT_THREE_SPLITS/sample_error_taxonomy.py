@@ -145,7 +145,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Sample stratified failures for 7-class E1–E7 error taxonomy.")
     parser.add_argument("--runs_root", default="TRAIN/ALT_THREE_SPLITS/runs")
     parser.add_argument("--model", default="smolvlm_500m")
-    parser.add_argument("--namespace", default="ebs64")
+    parser.add_argument("--namespace", default="ebs64_v2")
     parser.add_argument("--exp", default="B4")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--few_shot_pct", type=int, default=100)
