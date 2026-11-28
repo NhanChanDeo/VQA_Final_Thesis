@@ -172,6 +172,7 @@ class CheckpointManager:
         tag: str = "latest",
         trainer_state: Optional[Dict[str, Any]] = None,
         resume_state: Optional[Dict[str, Any]] = None,
+        train_log_path: Optional[Any] = None,
     ) -> Path:
         target_dir = self.local_ckpt_dir / tag
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -188,6 +189,11 @@ class CheckpointManager:
 
         if resume_state is not None and tag == "latest":
             torch.save(resume_state, target_dir / "resume_state.pt")
+
+        if train_log_path is not None and tag == "latest":
+            log_src = Path(train_log_path)
+            if log_src.exists():
+                shutil.copy2(log_src, target_dir / "train_log.jsonl")
 
         if self.gdrive_backup_dir is not None:
             drive_target = self.gdrive_backup_dir / tag
@@ -799,6 +805,39 @@ class CrossVQATrainer:
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
 
+    def _reconcile_log_on_resume(self, resume_from: str, resumed_opt_step: int) -> None:
+        """Restores backed-up train_log.jsonl entries up to resumed_opt_step without duplicates."""
+        def _read_entries(path: Path) -> List[Dict[str, Any]]:
+            if not path.exists():
+                return []
+            entries: List[Dict[str, Any]] = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if int(row.get("opt_step", 0)) <= resumed_opt_step:
+                    entries.append(row)
+            return entries
+
+        local_entries = _read_entries(self.log_path)
+        ckpt_entries = _read_entries(Path(resume_from) / "train_log.jsonl")
+        merged: Dict[int, Dict[str, Any]] = {}
+        for row in ckpt_entries:
+            merged[int(row.get("opt_step", 0))] = row
+        for row in local_entries:
+            merged[int(row.get("opt_step", 0))] = row
+        if not merged:
+            if self.log_path.exists():
+                self.log_path.write_text("", encoding="utf-8")
+            return
+        ordered = [merged[k] for k in sorted(merged)]
+        self.log_path.write_text(
+            "\n".join(json.dumps(r) for r in ordered) + "\n", encoding="utf-8"
+        )
+
     def _save_checkpoint(
         self,
         tag: str,
@@ -808,21 +847,14 @@ class CrossVQATrainer:
         if self.checkpoint_manager is None:
             return
         sig_params = inspect.signature(self.checkpoint_manager.save).parameters
+        save_kwargs: Dict[str, Any] = {"tag": tag, "trainer_state": trainer_state}
         if "resume_state" in sig_params:
-            self.checkpoint_manager.save(
-                self.model,
-                tag=tag,
-                trainer_state=trainer_state,
-                resume_state=resume_state,
-            )
-        else:
-            target_dir = self.checkpoint_manager.save(
-                self.model,
-                tag=tag,
-                trainer_state=trainer_state,
-            )
-            if resume_state is not None and tag == "latest" and target_dir is not None:
-                torch.save(resume_state, Path(target_dir) / "resume_state.pt")
+            save_kwargs["resume_state"] = resume_state
+        if "train_log_path" in sig_params and tag == "latest" and self.log_path.exists():
+            save_kwargs["train_log_path"] = str(self.log_path)
+        target_dir = self.checkpoint_manager.save(self.model, **save_kwargs)
+        if "resume_state" not in sig_params and resume_state is not None and tag == "latest" and target_dir is not None:
+            torch.save(resume_state, Path(target_dir) / "resume_state.pt")
 
     def fit(
         self,
@@ -936,6 +968,7 @@ class CrossVQATrainer:
                     start_epoch = saved_epoch
                     resume_skip_samples = int(r_state.get("samples_seen_in_epoch", 0))
                 _restore_rng_state(r_state.get("rng_state"))
+                self._reconcile_log_on_resume(resume_from, global_opt_step)
                 print(
                     f"Resumed stage '{stage_name}' from epoch={start_epoch}/{epochs}, "
                     f"opt_step={global_opt_step}, skip_samples={resume_skip_samples}, "

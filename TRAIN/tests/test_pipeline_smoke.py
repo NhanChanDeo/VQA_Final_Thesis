@@ -1430,3 +1430,138 @@ def test_phase_c_test_eval_targets_and_phase_d_suite(tmp_path):
     assert len(err_rows) == 6
     assert {r["error_tier"] for r in err_rows} == {"zero_score", "partial_below_threshold"}
     assert err_csv.exists()
+
+
+def test_train_log_backup_and_resume_across_fresh_vm(tmp_path):
+    """Verify latest checkpoint backs up train_log.jsonl and reconciles both fresh-VM and rewind resumes."""
+
+    class _MapDataset(torch.utils.data.Dataset):
+        def __init__(self, n: int = 16) -> None:
+            self.items = [
+                {
+                    "domain_type": "document_text",
+                    "image": Image.new("RGB", (16, 16), color=(20, 40, 60)),
+                    "question": f"q{i}?",
+                    "answers": ["ans"],
+                }
+                for i in range(n)
+            ]
+
+        def __len__(self) -> int:
+            return len(self.items)
+
+        def __getitem__(self, idx: int):
+            return self.items[idx]
+
+    ds = _MapDataset(16)
+    proc = _DummyProcessor(with_chat_template=False)
+    drive_dir = tmp_path / "gdrive_backup"
+    vm1_dir = tmp_path / "vm1_run"
+    ckpt_vm1 = CheckpointManager(
+        local_ckpt_dir=str(vm1_dir / "checkpoints"),
+        hf_repo_id=None,
+        hf_token=None,
+        gdrive_backup_dir=str(drive_dir),
+    )
+
+    class _AbortAfterStep3(RuntimeError):
+        pass
+
+    torch.manual_seed(11)
+    model_1 = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    trainer_1 = CrossVQATrainer(
+        model=model_1,
+        processor=proc,
+        run_dir=str(vm1_dir),
+        model_type="smolvlm",
+        device="cpu",
+        lr=1e-3,
+        warmup_ratio=0.1,
+        gradient_accumulation_steps=1,
+        optim_name="adamw",
+        checkpoint_manager=ckpt_vm1,
+    )
+    orig_append = trainer_1._append_log
+
+    def _append_and_crash_at_3(entry):
+        orig_append(entry)
+        if entry["opt_step"] == 3:
+            raise _AbortAfterStep3("disconnect between save checkpoints")
+
+    trainer_1._append_log = _append_and_crash_at_3
+    with pytest.raises(_AbortAfterStep3):
+        trainer_1.fit(ds, epochs=2, batch_size=4, save_every_steps=2, seed=42)
+
+    # Local VM1 logged steps 1..3, while Drive backup captured latest checkpoint at step 2
+    vm1_pre = [json.loads(l) for l in (vm1_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    drive_pre = [json.loads(l) for l in (drive_dir / "latest" / "train_log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert [r["opt_step"] for r in vm1_pre] == [1, 2, 3]
+    assert [r["opt_step"] for r in drive_pre] == [1, 2]
+
+    # Case A: Fresh VM2 with empty run_dir restores from Drive latest -> full 1..8 log without gaps
+    vm2_dir = tmp_path / "vm2_fresh_run"
+    vm2_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_vm2 = CheckpointManager(
+        local_ckpt_dir=str(vm2_dir / "checkpoints"),
+        hf_repo_id=None,
+        hf_token=None,
+        gdrive_backup_dir=str(drive_dir),
+    )
+    restored = ckpt_vm2.restore_checkpoint("latest")
+    assert restored is not None and (restored / "train_log.jsonl").exists()
+    model_2 = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    model_2.load_state_dict(torch.load(restored / "model_state.pt", map_location="cpu", weights_only=True))
+    trainer_2 = CrossVQATrainer(
+        model=model_2,
+        processor=proc,
+        run_dir=str(vm2_dir),
+        model_type="smolvlm",
+        device="cpu",
+        lr=1e-3,
+        warmup_ratio=0.1,
+        gradient_accumulation_steps=1,
+        optim_name="adamw",
+        checkpoint_manager=ckpt_vm2,
+    )
+    summary_2 = trainer_2.fit(
+        ds,
+        epochs=2,
+        batch_size=4,
+        save_every_steps=2,
+        eval_fn=lambda: {"selection_score": 0.9},
+        seed=42,
+        resume_from=str(restored),
+    )
+    assert summary_2["opt_steps"] == 8
+    vm2_logs = [json.loads(l) for l in (vm2_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert [r["opt_step"] for r in vm2_logs] == list(range(1, 9))
+    assert (drive_dir / "latest" / "train_log.jsonl").exists()
+    assert not (vm2_dir / "checkpoints" / "best" / "train_log.jsonl").exists()
+
+    # Case B: Same-disk rewind on VM1 trims stale step 3 and finishes cleanly 1..8 without duplicates
+    ckpt_vm1_rewind = CheckpointManager(local_ckpt_dir=str(vm1_dir / "checkpoints"), hf_repo_id=None, hf_token=None)
+    model_1b = _TinyVLMWithLinearConnector(hidden_dim=16, vocab_size=128)
+    model_1b.load_state_dict(torch.load(vm1_dir / "checkpoints" / "latest" / "model_state.pt", map_location="cpu", weights_only=True))
+    trainer_1b = CrossVQATrainer(
+        model=model_1b,
+        processor=proc,
+        run_dir=str(vm1_dir),
+        model_type="smolvlm",
+        device="cpu",
+        lr=1e-3,
+        warmup_ratio=0.1,
+        gradient_accumulation_steps=1,
+        optim_name="adamw",
+        checkpoint_manager=ckpt_vm1_rewind,
+    )
+    trainer_1b.fit(
+        ds,
+        epochs=2,
+        batch_size=4,
+        save_every_steps=2,
+        seed=42,
+        resume_from=str(vm1_dir / "checkpoints" / "latest"),
+    )
+    vm1_post = [json.loads(l) for l in (vm1_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert [r["opt_step"] for r in vm1_post] == list(range(1, 9))
+

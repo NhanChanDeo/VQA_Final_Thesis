@@ -43,10 +43,8 @@
 ## 3. Exact 14-Day Execution Runbook
 
 ### Pre-Flight (Day 1 Morning — Local + HF Hub)
-1. Push the `collator.py` EOS-masking fix and Phase C/D scripts to GitHub (`git push origin main`).
-2. **Delete old broken EOS-less checkpoints** from `gamusa/crossvqa-checkpoints` and Google Drive before training so `--resume_from_hub` does not restore pre-fix weights:
-   - `alt_three_splits/ebs64/smolvlm_500m/B1_target_only`
-   - `alt_three_splits/ebs64/smolvlm_500m/B2_source_only`
+1. Push the `collator.py` EOS-masking fix, `ebs64_v2` namespace isolation, and Phase C/D scripts to GitHub (`git push origin main`).
+2. **Namespace Isolation (`checkpoint_namespace: "ebs64_v2"`):** Already bumped in [`baselines_B1_B5.yaml`](../TRAIN/ALT_THREE_SPLITS/configs/baselines_B1_B5.yaml) so fresh `B1–B4` runs do **not** collide with or silently resume from the pre-EOS-fix `ebs64` checkpoints on Hugging Face (`gamusa/crossvqa-checkpoints`) or Google Drive. *(Optionally delete the stale `alt_three_splits/ebs64/smolvlm_500m/{B1_target_only,B2_source_only}` folders on HF Hub and Drive to reclaim space.)*
 
 ### Phase C1: Primary Baselines (Days 1–3, ~34h L4)
 1. **Fresh `B1` (`01_B1_TextVQA_Only_LoRA.ipynb`, ~10.5h):**
